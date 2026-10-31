@@ -1,13 +1,16 @@
+
 "use client";
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 
 export default function LoginPage() {
   const router = useRouter();
 
   const [email, setEmail] = useState("");
+  const [schoolId, setSchoolId] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -17,63 +20,102 @@ export default function LoginPage() {
     setError("");
     setLoading(true);
 
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+    try {
+      const { error: loginError } =
+        await supabase.auth.signInWithPassword({
+          email,
+          password,
+        });
 
-    setLoading(false);
+      if (loginError) throw loginError;
 
-    if (error) {
-      setError(error.message);
-      return;
+      const { error: schoolError } = await supabase.rpc(
+        "complete_school_registration",
+        {
+          p_school_code: schoolId.trim().toUpperCase(),
+        }
+      );
+
+      if (schoolError) {
+        await supabase.auth.signOut();
+        throw schoolError;
+      }
+
+      router.push("/dashboard");
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Login failed. Please try again."
+      );
+    } finally {
+      setLoading(false);
     }
-
-    router.push("/");
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-slate-50 p-6">
-      <div className="w-full max-w-md rounded-2xl bg-white p-8 shadow-lg">
-        <h1 className="mb-2 text-3xl font-bold text-blue-700">
-          EduTrack AI
+    <main className="flex min-h-screen items-center justify-center bg-slate-50 px-5 py-12">
+      <div className="w-full max-w-md rounded-3xl border border-slate-200 bg-white p-8 shadow-xl md:p-10">
+        <Link href="/" className="text-sm font-medium text-blue-600">
+          ← Back to home
+        </Link>
+
+        <div className="mt-8 flex h-12 w-12 items-center justify-center rounded-xl bg-blue-600 text-xl font-bold text-white">
+          E
+        </div>
+
+        <h1 className="mt-6 text-3xl font-bold text-slate-900">
+          Welcome back
         </h1>
 
-        <p className="mb-8 text-slate-500">
-          Sign in to your school management dashboard.
+        <p className="mt-2 text-slate-500">
+          Sign in to your institution's workspace.
         </p>
 
-        <form onSubmit={handleLogin} className="space-y-5">
+        <form onSubmit={handleLogin} className="mt-8 space-y-5">
           <div>
-            <label className="mb-2 block font-medium text-slate-700">
+            <label className="mb-2 block text-sm font-semibold">
               Email address
             </label>
             <input
-              type="email"
               required
+              type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="w-full rounded-lg border border-slate-300 p-3 text-slate-900 outline-none focus:border-blue-600"
-              placeholder="you@example.com"
+              placeholder="you@school.com"
+              className="w-full rounded-xl border border-slate-300 p-3 outline-none focus:border-blue-600"
             />
           </div>
 
           <div>
-            <label className="mb-2 block font-medium text-slate-700">
+            <label className="mb-2 block text-sm font-semibold">
+              School ID
+            </label>
+            <input
+              required
+              value={schoolId}
+              onChange={(e) => setSchoolId(e.target.value.toUpperCase())}
+              placeholder="Enter your School ID"
+              className="w-full rounded-xl border border-slate-300 p-3 uppercase outline-none focus:border-blue-600"
+            />
+          </div>
+
+          <div>
+            <label className="mb-2 block text-sm font-semibold">
               Password
             </label>
             <input
-              type="password"
               required
+              type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full rounded-lg border border-slate-300 p-3 text-slate-900 outline-none focus:border-blue-600"
               placeholder="Enter your password"
+              className="w-full rounded-xl border border-slate-300 p-3 outline-none focus:border-blue-600"
             />
           </div>
 
           {error && (
-            <p className="rounded-lg bg-red-50 p-3 text-sm text-red-600">
+            <p className="rounded-xl bg-red-50 p-4 text-sm text-red-700">
               {error}
             </p>
           )}
@@ -81,14 +123,17 @@ export default function LoginPage() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full rounded-lg bg-blue-600 p-3 font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+            className="w-full rounded-xl bg-blue-600 p-4 font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
           >
-            {loading ? "Signing in..." : "Sign in"}
+            {loading ? "Signing in..." : "Login to your school"}
           </button>
         </form>
 
-        <p className="mt-6 text-center text-sm text-slate-400">
-          Secure school attendance management
+        <p className="mt-6 text-center text-sm text-slate-500">
+          New institution?{" "}
+          <Link href="/register" className="font-semibold text-blue-600">
+            Create your school
+          </Link>
         </p>
       </div>
     </main>
