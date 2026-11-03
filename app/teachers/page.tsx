@@ -1,159 +1,318 @@
 
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
-import { Users, Search, Loader2, GraduationCap } from "lucide-react";
+import {
+  UserPlus,
+  Search,
+  Users,
+  Mail,
+  KeyRound,
+  Loader2,
+} from "lucide-react";
 
 type Teacher = {
-  id: string;
+  user_id: string;
   full_name: string;
+  teacher_key: string | null;
+  email?: string;
 };
 
 export default function TeachersPage() {
   const [teachers, setTeachers] = useState<Teacher[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [message, setMessage] = useState("");
+  const [schoolId, setSchoolId] = useState("");
+  const [fullName, setFullName] = useState("");
+  const [email, setEmail] = useState("");
   const [search, setSearch] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [sending, setSending] = useState(false);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
 
   useEffect(() => {
-    async function loadTeachers() {
-      setLoading(true);
-      setMessage("");
-
-      const { data: authData } = await supabase.auth.getUser();
-
-      if (!authData.user) {
-        setMessage("Please log in again.");
-        setLoading(false);
-        return;
-      }
-
-      const { data: profile, error: profileError } = await supabase
-        .from("profiles")
-        .select("school_id")
-        .eq("user_id", authData.user.id)
-        .maybeSingle();
-
-      if (profileError || !profile?.school_id) {
-        setMessage("We couldn't find your school profile.");
-        setLoading(false);
-        return;
-      }
-
-      const { data, error } = await supabase
-        .from("profiles")
-        .select("id, full_name")
-        .eq("school_id", profile.school_id)
-        .eq("role", "teacher")
-        .order("full_name");
-
-      if (error) {
-        setMessage(error.message);
-      } else {
-        setTeachers(data || []);
-      }
-
-      setLoading(false);
-    }
-
     loadTeachers();
   }, []);
 
-  const filteredTeachers = useMemo(() => {
-    const term = search.trim().toLowerCase();
-    return teachers.filter((teacher) =>
-      teacher.full_name.toLowerCase().includes(term)
-    );
-  }, [teachers, search]);
+  async function loadTeachers() {
+    setLoading(true);
+
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      setError("Please log in again.");
+      setLoading(false);
+      return;
+    }
+
+    const { data: profile, error: profileError } = await supabase
+      .from("profiles")
+      .select("school_id")
+      .eq("user_id", user.id)
+      .single();
+
+    if (profileError || !profile?.school_id) {
+      setError("Could not find your school profile.");
+      setLoading(false);
+      return;
+    }
+
+    setSchoolId(profile.school_id);
+
+    const { data, error: teacherError } = await supabase
+      .from("profiles")
+      .select("user_id, full_name, teacher_key")
+      .eq("school_id", profile.school_id)
+      .eq("role", "teacher")
+      .order("full_name");
+
+    if (teacherError) {
+      setError(teacherError.message);
+    } else {
+      setTeachers(data || []);
+    }
+
+    setLoading(false);
+  }
+
+  async function inviteTeacher(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setError("");
+    setMessage("");
+
+    if (!fullName.trim() || !email.trim()) {
+      setError("Please enter the teacher's name and email.");
+      return;
+    }
+
+    setSending(true);
+
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session?.access_token) {
+        throw new Error("Your session has expired. Please log in again.");
+      }
+
+      const response = await fetch("/api/teachers", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          fullName: fullName.trim(),
+          email: email.trim(),
+        }),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || "Could not invite teacher.");
+      }
+
+      setMessage(
+        `Invitation sent! Teacher Key: ${result.teacher.teacherKey}`
+      );
+
+      setFullName("");
+      setEmail("");
+
+      await loadTeachers();
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Something went wrong."
+      );
+    } finally {
+      setSending(false);
+    }
+  }
+
+  const filteredTeachers = teachers.filter((teacher) =>
+    `${teacher.full_name} ${teacher.teacher_key || ""}`
+      .toLowerCase()
+      .includes(search.toLowerCase())
+  );
 
   return (
-    <div className="space-y-7">
-      <section>
-        <h1 className="text-2xl font-bold text-[#193B32]">
-          Teacher Management
-        </h1>
-        <p className="mt-1 text-sm text-gray-500">
-          View and manage teachers in your institution.
-        </p>
-      </section>
+    <div className="space-y-8">
+      <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
+        <div>
+          <p className="text-sm font-medium text-emerald-700">
+            School Management
+          </p>
+          <h1 className="mt-1 text-3xl font-bold text-[#193B32]">
+            Teachers
+          </h1>
+          <p className="mt-2 text-sm text-gray-500">
+            Invite teachers and manage their school accounts.
+          </p>
+        </div>
 
-      <section className="rounded-2xl border border-[#E8EEE9] bg-white p-5 shadow-sm">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3 rounded-2xl border border-emerald-100 bg-white px-5 py-3 shadow-sm">
+          <Users className="text-emerald-600" size={22} />
           <div>
-            <p className="text-sm text-gray-500">Registered teachers</p>
-            <p className="mt-2 text-3xl font-bold text-[#193B32]">
-              {loading ? "—" : teachers.length}
+            <p className="text-2xl font-bold text-[#193B32]">
+              {teachers.length}
             </p>
-          </div>
-          <div className="rounded-xl bg-violet-100 p-3 text-violet-700">
-            <Users size={25} />
+            <p className="text-xs text-gray-500">Total teachers</p>
           </div>
         </div>
-      </section>
+      </div>
 
       {message && (
-        <div className="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800">
           {message}
         </div>
       )}
 
-      <section className="overflow-hidden rounded-2xl border border-[#E8EEE9] bg-white shadow-sm">
-        <div className="flex flex-col gap-4 border-b border-gray-100 p-5 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h2 className="font-bold text-[#193B32]">All teachers</h2>
-            <p className="mt-1 text-xs text-gray-500">
-              {filteredTeachers.length} teacher records
-            </p>
-          </div>
-
-          <div className="relative w-full sm:max-w-xs">
-            <Search
-              size={18}
-              className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
-            />
-            <input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search teachers..."
-              className="w-full rounded-xl border border-gray-200 py-2.5 pl-10 pr-4 text-sm outline-none focus:border-emerald-500"
-            />
-          </div>
+      {error && (
+        <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          {error}
         </div>
+      )}
 
-        {loading ? (
-          <div className="flex items-center justify-center gap-3 p-12 text-sm text-gray-500">
-            <Loader2 className="animate-spin" size={20} />
-            Loading teachers...
+      <div className="grid gap-6 lg:grid-cols-[1fr_1.4fr]">
+        <section className="rounded-2xl border border-gray-100 bg-white p-6 shadow-sm">
+          <div className="mb-6 flex items-center gap-3">
+            <div className="rounded-xl bg-emerald-50 p-3 text-emerald-700">
+              <UserPlus size={22} />
+            </div>
+            <div>
+              <h2 className="font-bold text-[#193B32]">Invite a Teacher</h2>
+              <p className="text-xs text-gray-500">
+                Send a secure account invitation
+              </p>
+            </div>
           </div>
-        ) : filteredTeachers.length === 0 ? (
-          <div className="p-12 text-center">
-            <GraduationCap className="mx-auto text-gray-300" size={38} />
-            <p className="mt-3 font-semibold text-gray-700">
-              {search ? "No matching teachers" : "No teachers registered yet"}
-            </p>
-            <p className="mt-1 text-sm text-gray-400">
-              Teacher accounts will appear here after they are invited.
+
+          <form onSubmit={inviteTeacher} className="space-y-4">
+            <div>
+              <label className="mb-2 block text-sm font-medium text-gray-700">
+                Teacher's full name
+              </label>
+              <input
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                placeholder="Enter full name"
+                className="w-full rounded-xl border border-gray-200 px-4 py-3 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="mb-2 block text-sm font-medium text-gray-700">
+                Email address
+              </label>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="teacher@school.com"
+                className="w-full rounded-xl border border-gray-200 px-4 py-3 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                required
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={sending || !schoolId}
+              className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-700 px-5 py-3 font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {sending ? (
+                <>
+                  <Loader2 className="animate-spin" size={18} />
+                  Sending invitation...
+                </>
+              ) : (
+                <>
+                  <Mail size={18} />
+                  Send Invitation
+                </>
+              )}
+            </button>
+          </form>
+
+          <div className="mt-5 rounded-xl bg-[#F4F8F5] p-4">
+            <p className="text-xs leading-5 text-gray-600">
+              Each invited teacher receives a unique Teacher Key. They will
+              use it with their School ID and password when signing in.
             </p>
           </div>
-        ) : (
-          <div className="divide-y divide-gray-100">
-            {filteredTeachers.map((teacher) => (
-              <div
-                key={teacher.id}
-                className="flex items-center gap-3 px-5 py-4 transition hover:bg-emerald-50/40"
-              >
-                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-violet-100 font-bold text-violet-700">
-                  {teacher.full_name.charAt(0).toUpperCase()}
+        </section>
+
+        <section className="rounded-2xl border border-gray-100 bg-white p-6 shadow-sm">
+          <div className="mb-5 flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+            <div>
+              <h2 className="font-bold text-[#193B32]">Teacher Directory</h2>
+              <p className="mt-1 text-xs text-gray-500">
+                Teachers registered with your school
+              </p>
+            </div>
+
+            <div className="relative">
+              <Search
+                size={17}
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
+              />
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search teachers..."
+                className="w-full rounded-xl border border-gray-200 py-2.5 pl-9 pr-3 text-sm outline-none focus:border-emerald-500 sm:w-52"
+              />
+            </div>
+          </div>
+
+          {loading ? (
+            <div className="flex justify-center py-12">
+              <Loader2 className="animate-spin text-emerald-600" size={28} />
+            </div>
+          ) : filteredTeachers.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-gray-200 py-12 text-center">
+              <Users className="mx-auto mb-3 text-gray-300" size={32} />
+              <p className="font-medium text-gray-600">
+                {search ? "No matching teachers" : "No teachers added yet"}
+              </p>
+              <p className="mt-1 text-xs text-gray-400">
+                Invite your first teacher using the form.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {filteredTeachers.map((teacher) => (
+                <div
+                  key={teacher.user_id}
+                  className="flex items-center gap-3 rounded-xl border border-gray-100 p-4 transition hover:border-emerald-200 hover:bg-emerald-50/40"
+                >
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-violet-100 font-bold text-violet-700">
+                    {teacher.full_name.charAt(0).toUpperCase()}
+                  </div>
+
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate font-semibold text-[#193B32]">
+                      {teacher.full_name}
+                    </p>
+                    <p className="mt-1 flex items-center gap-1 text-xs text-gray-500">
+                      <KeyRound size={12} />
+                      {teacher.teacher_key || "Key not assigned"}
+                    </p>
+                  </div>
+
+                  <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700">
+                    Teacher
+                  </span>
                 </div>
-                <p className="font-semibold text-[#193B32]">
-                  {teacher.full_name}
-                </p>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
+              ))}
+            </div>
+          )}
+        </section>
+      </div>
     </div>
   );
 }
