@@ -405,7 +405,13 @@ export default function DashboardPage() {
               return (
                 <button
                   key={item.name}
-                  onClick={() => setActive(item.target)}
+                  onClick={() => {
+                    if (item.target === "Classes") {
+                      router.push("/classes");
+                    } else {
+                      setActive(item.target);
+                    }
+                  }}
                   className="group flex items-start gap-4 rounded-2xl border border-slate-100 bg-white p-5 text-left shadow-sm transition-all duration-300 hover:-translate-y-1 hover:border-emerald-200 hover:shadow-xl hover:shadow-emerald-900/5"
                 >
                   <div className={`rounded-xl p-3 ${item.color} transition-transform duration-300 group-hover:scale-110`}>
