@@ -111,14 +111,16 @@ export default function ReportsPage() {
   const totalRecords =
     stats.present + stats.absent + stats.late + stats.halfDay + stats.leave;
 
-  const attendanceRate =
-    totalRecords > 0
-      ? Math.round(
-          ((stats.present + stats.late + stats.halfDay * 0.5) /
-            totalRecords) *
-            100
-        )
-      : 0;
+  const eligibleRecords = totalRecords - stats.leave;
+
+const attendanceRate =
+  eligibleRecords > 0
+    ? Math.round(
+        ((stats.present + stats.late + stats.halfDay * 0.5) /
+          eligibleRecords) *
+          100
+      )
+    : 0;
 
   const cards = [
     {
