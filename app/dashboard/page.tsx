@@ -140,7 +140,11 @@ export default function DashboardPage() {
               <button
                 key={item.name}
                 onClick={() => {
-                  setActive(item.name);
+                  if (item.name === "Classes") {
+                    router.push("/classes");
+                  } else {
+                    setActive(item.name);
+                  }
                   setMobileOpen(false);
                 }}
                 className={`flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium transition-all duration-200 ${
