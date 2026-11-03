@@ -21,14 +21,14 @@ import {
 import { supabase } from "@/lib/supabase";
 
 const navigation = [
-  { name: "Overview", href: "/dashboard", icon: LayoutDashboard },
-  { name: "Students", href: "/dashboard/students", icon: GraduationCap },
-  { name: "Teachers", href: "/dashboard/teachers", icon: Users },
-  { name: "Classes", href: "/dashboard/classes", icon: School },
-  { name: "Subjects", href: "/dashboard/subjects", icon: BookOpen },
-  { name: "Attendance", href: "/dashboard/attendance", icon: CalendarCheck },
-  { name: "Reports", href: "/dashboard/reports", icon: BarChart3 },
-  { name: "Settings", href: "/dashboard/settings", icon: Settings },
+  { name: "Overview", href: "/dashboard", icon: LayoutDashboard, roles: ["school_admin", "super_admin", "teacher"] },
+  { name: "Students", href: "/dashboard/students", icon: GraduationCap, roles: ["school_admin", "super_admin"] },
+  { name: "Teachers", href: "/dashboard/teachers", icon: Users, roles: ["school_admin", "super_admin"] },
+  { name: "Classes", href: "/dashboard/classes", icon: School, roles: ["school_admin", "super_admin"] },
+  { name: "Subjects", href: "/dashboard/subjects", icon: BookOpen, roles: ["school_admin", "super_admin"] },
+  { name: "Attendance", href: "/dashboard/attendance", icon: CalendarCheck, roles: ["school_admin", "super_admin", "teacher"] },
+  { name: "Reports", href: "/dashboard/reports", icon: BarChart3, roles: ["school_admin", "super_admin", "teacher"] },
+  { name: "Settings", href: "/dashboard/settings", icon: Settings, roles: ["school_admin", "super_admin"] },
 ];
 
 export default function DashboardLayout({
@@ -39,8 +39,9 @@ export default function DashboardLayout({
   const pathname = usePathname();
   const router = useRouter();
 
-  const [fullName, setFullName] = useState("Admin");
+  const [fullName, setFullName] = useState("User");
   const [schoolName, setSchoolName] = useState("EduTrack AI");
+  const [userRole, setUserRole] = useState("");
   const [mobileOpen, setMobileOpen] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -53,17 +54,22 @@ export default function DashboardLayout({
         return;
       }
 
-      const { data: profile } = await supabase
+      const { data: profile, error } = await supabase
         .from("profiles")
-        .select("full_name, school_id")
+        .select("full_name, school_id, role")
         .eq("user_id", authData.user.id)
         .maybeSingle();
 
-      if (profile?.full_name) {
-        setFullName(profile.full_name);
+      if (error || !profile) {
+        await supabase.auth.signOut();
+        router.replace("/login");
+        return;
       }
 
-      if (profile?.school_id) {
+      setFullName(profile.full_name || "User");
+      setUserRole(profile.role || "");
+
+      if (profile.school_id) {
         const { data: school } = await supabase
           .from("schools")
           .select("name")
@@ -86,8 +92,12 @@ export default function DashboardLayout({
     router.replace("/login");
   }
 
+  const visibleNavigation = navigation.filter((item) =>
+    item.roles.includes(userRole)
+  );
+
   const pageTitle =
-    navigation.find((item) =>
+    visibleNavigation.find((item) =>
       item.href === "/dashboard"
         ? pathname === item.href
         : pathname.startsWith(item.href)
@@ -112,12 +122,14 @@ export default function DashboardLayout({
           <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-emerald-400 text-[#123C35]">
             <School size={24} />
           </div>
+
           <div className="min-w-0">
             <h1 className="text-lg font-bold tracking-wide">EduTrack AI</h1>
             <p className="truncate text-xs text-emerald-100/70">
               {schoolName}
             </p>
           </div>
+
           <button
             onClick={() => setMobileOpen(false)}
             className="ml-auto rounded-lg p-2 hover:bg-white/10 lg:hidden"
@@ -132,7 +144,7 @@ export default function DashboardLayout({
         </div>
 
         <nav className="flex-1 space-y-1 overflow-y-auto px-4">
-          {navigation.map((item) => {
+          {visibleNavigation.map((item) => {
             const Icon = item.icon;
             const active =
               item.href === "/dashboard"
@@ -162,9 +174,12 @@ export default function DashboardLayout({
             <div className="flex h-10 w-10 items-center justify-center rounded-full bg-violet-400/20 font-bold text-violet-200">
               {fullName.charAt(0).toUpperCase()}
             </div>
+
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-semibold">{fullName}</p>
-              <p className="text-xs text-emerald-100/60">School Admin</p>
+              <p className="text-xs capitalize text-emerald-100/60">
+                {userRole.replaceAll("_", " ")}
+              </p>
             </div>
           </div>
 
@@ -188,6 +203,7 @@ export default function DashboardLayout({
             >
               <Menu size={22} />
             </button>
+
             <div>
               <h2 className="text-xl font-bold text-[#193B32]">
                 {pageTitle}
