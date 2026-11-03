@@ -135,6 +135,19 @@ export default function LoginPage() {
             Create your school
           </Link>
         </p>
+
+        <div className="mt-6 border-t border-slate-100 pt-5 text-center">
+          <p className="text-sm text-slate-500">
+            Are you a teacher?
+          </p>
+
+          <Link
+            href="/teacher-login"
+            className="mt-2 inline-block font-semibold text-emerald-700 transition hover:text-emerald-900"
+          >
+            Teacher Login →
+          </Link>
+        </div>
       </div>
     </main>
   );
