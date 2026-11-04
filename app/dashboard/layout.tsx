@@ -17,6 +17,7 @@ import {
   Menu,
   X,
   School,
+  ClipboardList,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 
@@ -24,6 +25,12 @@ const navigation = [
   { name: "Overview", href: "/dashboard", icon: LayoutDashboard, roles: ["school_admin", "super_admin", "teacher"] },
   { name: "Students", href: "/dashboard/students", icon: GraduationCap, roles: ["school_admin", "super_admin"] },
   { name: "Teachers", href: "/dashboard/teachers", icon: Users, roles: ["school_admin", "super_admin"] },
+    {
+    name: "Teacher Assignments",
+    href: "/dashboard/teacher-assignments",
+    icon: ClipboardList,
+    roles: ["school_admin", "super_admin"],
+  },
   { name: "Classes", href: "/dashboard/classes", icon: School, roles: ["school_admin", "super_admin"] },
   { name: "Subjects", href: "/dashboard/subjects", icon: BookOpen, roles: ["school_admin", "super_admin"] },
   { name: "Attendance", href: "/dashboard/attendance", icon: CalendarCheck, roles: ["school_admin", "super_admin", "teacher"] },
