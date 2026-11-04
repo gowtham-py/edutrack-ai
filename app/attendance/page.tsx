@@ -8,8 +8,9 @@ import {
   CalendarCheck,
   Play,
   Loader2,
-  BookOpen,
   School,
+  Save,
+  Users,
 } from "lucide-react";
 
 type SchoolClass = {
@@ -38,6 +39,27 @@ type Session = {
   subject_id: string;
 };
 
+type Student = {
+  id: string;
+  full_name: string;
+  admission_number: string;
+};
+
+type AttendanceStatus =
+  | "present"
+  | "absent"
+  | "late"
+  | "half_day"
+  | "approved_leave";
+
+const statusOptions: { value: AttendanceStatus; label: string }[] = [
+  { value: "present", label: "Present" },
+  { value: "absent", label: "Absent" },
+  { value: "late", label: "Late" },
+  { value: "half_day", label: "Half-day" },
+  { value: "approved_leave", label: "Approved Leave" },
+];
+
 export default function AttendancePage() {
   const [schoolId, setSchoolId] = useState("");
   const [userId, setUserId] = useState("");
@@ -51,8 +73,16 @@ export default function AttendancePage() {
   const [classId, setClassId] = useState("");
   const [subjectId, setSubjectId] = useState("");
 
+  const [students, setStudents] = useState<Student[]>([]);
+  const [studentStatuses, setStudentStatuses] = useState<
+    Record<string, AttendanceStatus>
+  >({});
+  const [activeSession, setActiveSession] = useState<Session | null>(null);
+
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [loadingStudents, setLoadingStudents] = useState(false);
+
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
@@ -169,7 +199,9 @@ export default function AttendancePage() {
 
     let sessionQuery = supabase
       .from("attendance_sessions")
-      .select("id, session_date, started_at, ended_at, class_id, subject_id")
+      .select(
+        "id, session_date, started_at, ended_at, class_id, subject_id"
+      )
       .eq("school_id", profile.school_id)
       .order("started_at", { ascending: false })
       .limit(20);
@@ -207,6 +239,9 @@ export default function AttendancePage() {
   function handleClassChange(value: string) {
     setClassId(value);
     setSubjectId("");
+    setActiveSession(null);
+    setStudents([]);
+    setStudentStatuses({});
   }
 
   async function startSession(event: FormEvent<HTMLFormElement>) {
@@ -232,10 +267,13 @@ export default function AttendancePage() {
     setSaving(true);
     setMessage("");
     setError("");
+    setStudents([]);
+    setStudentStatuses({});
+    setActiveSession(null);
 
     const now = new Date();
 
-    const { error: insertError } = await supabase
+    const { data: sessionData, error: insertError } = await supabase
       .from("attendance_sessions")
       .insert({
         school_id: schoolId,
@@ -244,22 +282,113 @@ export default function AttendancePage() {
         teacher_id: userId,
         session_date: now.toLocaleDateString("en-CA"),
         started_at: now.toISOString(),
-      });
+      })
+      .select(
+        "id, session_date, started_at, ended_at, class_id, subject_id"
+      )
+      .single();
 
     if (insertError) {
       setError(insertError.message);
+      setSaving(false);
+      return;
+    }
+
+    setActiveSession(sessionData);
+    setMessage("Attendance session started successfully!");
+
+    await loadStudents(classId);
+
+    setSaving(false);
+    await loadData();
+  }
+
+  async function loadStudents(selectedClassId: string) {
+    setLoadingStudents(true);
+    setError("");
+
+    const { data, error: studentError } = await supabase
+      .from("students")
+      .select("id, full_name, admission_number")
+      .eq("school_id", schoolId)
+      .eq("class_id", selectedClassId)
+      .order("full_name");
+
+    if (studentError) {
+      setError(studentError.message);
+      setLoadingStudents(false);
+      return;
+    }
+
+    const studentList = data || [];
+    setStudents(studentList);
+
+    const initialStatuses: Record<string, AttendanceStatus> = {};
+
+    studentList.forEach((student) => {
+      initialStatuses[student.id] = "present";
+    });
+
+    setStudentStatuses(initialStatuses);
+    setLoadingStudents(false);
+
+    if (studentList.length === 0) {
+      setMessage("No students are registered in this class yet.");
+    }
+  }
+
+  function updateStudentStatus(
+    studentId: string,
+    status: AttendanceStatus
+  ) {
+    setStudentStatuses((previous) => ({
+      ...previous,
+      [studentId]: status,
+    }));
+  }
+
+  async function saveAttendance() {
+    if (!activeSession || !students.length) {
+      setError("Start a session and load students first.");
+      return;
+    }
+
+    if (students.some((student) => !studentStatuses[student.id])) {
+      setError("Please select a status for every student.");
+      return;
+    }
+
+    setSaving(true);
+    setError("");
+    setMessage("");
+
+    const now = new Date().toISOString();
+
+    const records = students.map((student) => ({
+      session_id: activeSession.id,
+      student_id: student.id,
+      status: studentStatuses[student.id],
+      marked_by: userId,
+      marked_at: now,
+    }));
+
+    const { error: saveError } = await supabase
+      .from("attendance_records")
+      .upsert(records, {
+        onConflict: "session_id,student_id",
+      });
+
+    if (saveError) {
+      setError(saveError.message);
     } else {
-      setClassId("");
-      setSubjectId("");
-      setMessage("Attendance session created successfully!");
-      await loadData();
+      setMessage("Student attendance saved successfully!");
     }
 
     setSaving(false);
   }
 
   function classLabel(id: string) {
-    const item = classes.find((schoolClass) => schoolClass.id === id);
+    const item = classes.find((item) => item.id === id);
     return item
       ? `${item.class_name} - ${item.section}`
       : "Unknown class";
@@ -267,7 +396,7 @@ export default function AttendancePage() {
 
   function subjectLabel(id: string) {
     return (
-      subjects.find((subject) => subject.id === id)?.subject_name ||
+      subjects.find((item) => item.id === id)?.subject_name ||
       "Unknown subject"
     );
   }
@@ -312,9 +441,7 @@ export default function AttendancePage() {
             <CalendarCheck size={24} />
           </div>
           <div>
-            <h2 className="font-bold text-[#193B32]">
-              Start attendance
-            </h2>
+            <h2 className="font-bold text-[#193B32]">Start attendance</h2>
             <p className="text-sm text-gray-500">
               Choose the class and subject for this session.
             </p>
@@ -345,7 +472,12 @@ export default function AttendancePage() {
               <select
                 required
                 value={subjectId}
-                onChange={(event) => setSubjectId(event.target.value)}
+                onChange={(event) => {
+                  setSubjectId(event.target.value);
+                  setActiveSession(null);
+                  setStudents([]);
+                  setStudentStatuses({});
+                }}
                 disabled={!classId}
                 className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 disabled:bg-gray-50 disabled:text-gray-400"
               >
@@ -364,7 +496,6 @@ export default function AttendancePage() {
             disabled={
               saving ||
               !classes.length ||
-              !availableSubjects.length ||
               !classId ||
               !subjectId
             }
@@ -385,16 +516,95 @@ export default function AttendancePage() {
                 : "Add at least one class before starting attendance."}
             </p>
           )}
-
-          {classes.length > 0 &&
-            !availableSubjects.length &&
-            classId && (
-              <p className="text-sm text-amber-700">
-                No subjects are assigned to this class.
-              </p>
-            )}
         </form>
       </section>
+
+      {activeSession && (
+        <section className="overflow-hidden rounded-2xl border border-[#E8EEE9] bg-white shadow-sm">
+          <div className="flex flex-col gap-3 border-b border-gray-100 p-5 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="font-bold text-[#193B32]">
+                Mark student attendance
+              </h2>
+              <p className="mt-1 text-sm text-gray-500">
+                {classLabel(activeSession.class_id)} ·{" "}
+                {subjectLabel(activeSession.subject_id)}
+              </p>
+            </div>
+            <div className="flex items-center gap-2 rounded-xl bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700">
+              <Users size={18} />
+              {students.length} students
+            </div>
+          </div>
+
+          {loadingStudents ? (
+            <div className="flex items-center justify-center gap-3 p-10 text-sm text-gray-500">
+              <Loader2 className="animate-spin" size={20} />
+              Loading students...
+            </div>
+          ) : students.length === 0 ? (
+            <div className="p-10 text-center text-sm text-gray-500">
+              No students found in this class. Add students before marking attendance.
+            </div>
+          ) : (
+            <>
+              <div className="divide-y divide-gray-100">
+                {students.map((student, index) => (
+                  <div
+                    key={student.id}
+                    className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"
+                  >
+                    <div>
+                      <p className="font-semibold text-[#193B32]">
+                        {index + 1}. {student.full_name}
+                      </p>
+                      <p className="mt-1 text-xs text-gray-500">
+                        Admission No: {student.admission_number}
+                      </p>
+                    </div>
+
+                    <select
+                      value={studentStatuses[student.id] || "present"}
+                      onChange={(event) =>
+                        updateStudentStatus(
+                          student.id,
+                          event.target.value as AttendanceStatus
+                        )
+                      }
+                      className="w-full rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm outline-none focus:border-emerald-500 sm:w-48"
+                    >
+                      {statusOptions.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex flex-col gap-3 border-t border-gray-100 bg-gray-50 p-5 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-sm text-gray-500">
+                  Review each student's status before saving.
+                </p>
+                <button
+                  type="button"
+                  onClick={saveAttendance}
+                  disabled={saving || !students.length}
+                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#087F5B] px-6 py-3 text-sm font-semibold text-white transition hover:bg-[#066B4D] disabled:opacity-50"
+                >
+                  {saving ? (
+                    <Loader2 className="animate-spin" size={18} />
+                  ) : (
+                    <Save size={18} />
+                  )}
+                  {saving ? "Saving..." : "Save attendance"}
+                </button>
+              </div>
+            </>
+          )}
+        </section>
+      )}
 
       <section className="overflow-hidden rounded-2xl border border-[#E8EEE9] bg-white shadow-sm">
         <div className="border-b border-gray-100 p-5">
@@ -408,7 +618,10 @@ export default function AttendancePage() {
 
         {sessions.length === 0 ? (
           <div className="p-12 text-center">
-            <CalendarCheck className="mx-auto text-gray-300" size={38} />
+            <CalendarCheck
+              className="mx-auto text-gray-300"
+              size={38}
+            />
             <p className="mt-3 font-semibold text-gray-700">
               No attendance sessions yet
             </p>
@@ -436,7 +649,6 @@ export default function AttendancePage() {
                     </p>
                   </div>
                 </div>
-
                 <div className="text-sm sm:text-right">
                   <p className="font-medium text-gray-700">
                     {session.session_date}
