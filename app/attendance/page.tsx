@@ -2,8 +2,15 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import type { FormEvent } from "react";
 import { supabase } from "@/lib/supabase";
-import { CalendarCheck, Play, Loader2, BookOpen, School } from "lucide-react";
+import {
+  CalendarCheck,
+  Play,
+  Loader2,
+  BookOpen,
+  School,
+} from "lucide-react";
 
 type SchoolClass = {
   id: string;
@@ -14,6 +21,12 @@ type SchoolClass = {
 type Subject = {
   id: string;
   subject_name: string;
+};
+
+type Assignment = {
+  id: string;
+  class_id: string;
+  subject_id: string;
 };
 
 type Session = {
@@ -28,73 +41,149 @@ type Session = {
 export default function AttendancePage() {
   const [schoolId, setSchoolId] = useState("");
   const [userId, setUserId] = useState("");
+  const [role, setRole] = useState("");
+
   const [classes, setClasses] = useState<SchoolClass[]>([]);
   const [subjects, setSubjects] = useState<Subject[]>([]);
+  const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
+
   const [classId, setClassId] = useState("");
   const [subjectId, setSubjectId] = useState("");
+
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
 
   async function loadData() {
     setLoading(true);
     setMessage("");
+    setError("");
 
     const { data: authData } = await supabase.auth.getUser();
 
     if (!authData.user) {
-      setMessage("Please log in again.");
-      setLoading(false);
+      window.location.href = "/login";
       return;
     }
 
-    setUserId(authData.user.id);
+    const currentUserId = authData.user.id;
+    setUserId(currentUserId);
 
     const { data: profile, error: profileError } = await supabase
       .from("profiles")
-      .select("school_id")
-      .eq("user_id", authData.user.id)
+      .select("school_id, role")
+      .eq("user_id", currentUserId)
       .maybeSingle();
 
     if (profileError || !profile?.school_id) {
-      setMessage("We couldn't find your school profile.");
+      setError("We couldn't find your school profile.");
       setLoading(false);
       return;
     }
 
     setSchoolId(profile.school_id);
+    setRole(profile.role);
 
-    const [classResult, subjectResult, sessionResult] = await Promise.all([
-      supabase
+    let assignedClassIds: string[] = [];
+    let assignedSubjectIds: string[] = [];
+
+    if (profile.role === "teacher") {
+      const { data: assignmentData, error: assignmentError } =
+        await supabase
+          .from("teacher_assignments")
+          .select("id, class_id, subject_id")
+          .eq("school_id", profile.school_id)
+          .eq("teacher_id", currentUserId);
+
+      if (assignmentError) {
+        setError("Unable to load your teaching assignments.");
+        setLoading(false);
+        return;
+      }
+
+      const teacherAssignments = assignmentData || [];
+      setAssignments(teacherAssignments);
+
+      assignedClassIds = [
+        ...new Set(teacherAssignments.map((item) => item.class_id)),
+      ];
+
+      assignedSubjectIds = [
+        ...new Set(teacherAssignments.map((item) => item.subject_id)),
+      ];
+    } else {
+      setAssignments([]);
+    }
+
+    let classData: SchoolClass[] = [];
+    let subjectData: Subject[] = [];
+
+    if (profile.role !== "teacher" || assignedClassIds.length > 0) {
+      let classQuery = supabase
         .from("classes")
         .select("id, class_name, section")
         .eq("school_id", profile.school_id)
-        .order("class_name"),
-      supabase
+        .order("class_name");
+
+      if (profile.role === "teacher") {
+        classQuery = classQuery.in("id", assignedClassIds);
+      }
+
+      const { data, error: classError } = await classQuery;
+
+      if (classError) {
+        setError(classError.message);
+        setLoading(false);
+        return;
+      }
+
+      classData = data || [];
+    }
+
+    if (profile.role !== "teacher" || assignedSubjectIds.length > 0) {
+      let subjectQuery = supabase
         .from("subjects")
         .select("id, subject_name")
         .eq("school_id", profile.school_id)
-        .order("subject_name"),
-      supabase
-        .from("attendance_sessions")
-        .select("id, session_date, started_at, ended_at, class_id, subject_id")
-        .eq("school_id", profile.school_id)
-        .order("started_at", { ascending: false })
-        .limit(20),
-    ]);
+        .order("subject_name");
 
-    if (classResult.error || subjectResult.error || sessionResult.error) {
-      setMessage(
-        classResult.error?.message ||
-          subjectResult.error?.message ||
-          sessionResult.error?.message ||
-          "Unable to load attendance data."
-      );
+      if (profile.role === "teacher") {
+        subjectQuery = subjectQuery.in("id", assignedSubjectIds);
+      }
+
+      const { data, error: subjectError } = await subjectQuery;
+
+      if (subjectError) {
+        setError(subjectError.message);
+        setLoading(false);
+        return;
+      }
+
+      subjectData = data || [];
+    }
+
+    setClasses(classData);
+    setSubjects(subjectData);
+
+    let sessionQuery = supabase
+      .from("attendance_sessions")
+      .select("id, session_date, started_at, ended_at, class_id, subject_id")
+      .eq("school_id", profile.school_id)
+      .order("started_at", { ascending: false })
+      .limit(20);
+
+    if (profile.role === "teacher") {
+      sessionQuery = sessionQuery.eq("teacher_id", currentUserId);
+    }
+
+    const { data: sessionData, error: sessionError } = await sessionQuery;
+
+    if (sessionError) {
+      setError(sessionError.message);
     } else {
-      setClasses(classResult.data || []);
-      setSubjects(subjectResult.data || []);
-      setSessions(sessionResult.data || []);
+      setSessions(sessionData || []);
     }
 
     setLoading(false);
@@ -104,34 +193,65 @@ export default function AttendancePage() {
     loadData();
   }, []);
 
-  async function startSession(event: React.FormEvent<HTMLFormElement>) {
+  const availableSubjects =
+    role === "teacher"
+      ? subjects.filter((subject) =>
+          assignments.some(
+            (assignment) =>
+              assignment.class_id === classId &&
+              assignment.subject_id === subject.id
+          )
+        )
+      : subjects;
+
+  function handleClassChange(value: string) {
+    setClassId(value);
+    setSubjectId("");
+  }
+
+  async function startSession(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     if (!schoolId || !userId || !classId || !subjectId) {
-      setMessage("Please select both a class and a subject.");
+      setError("Please select both a class and a subject.");
+      return;
+    }
+
+    if (
+      role === "teacher" &&
+      !assignments.some(
+        (assignment) =>
+          assignment.class_id === classId &&
+          assignment.subject_id === subjectId
+      )
+    ) {
+      setError("You are not assigned to this class and subject.");
       return;
     }
 
     setSaving(true);
     setMessage("");
+    setError("");
 
     const now = new Date();
 
-    const { error } = await supabase.from("attendance_sessions").insert({
-      school_id: schoolId,
-      class_id: classId,
-      subject_id: subjectId,
-      teacher_id: userId,
-      session_date: now.toISOString().slice(0, 10),
-      started_at: now.toISOString(),
-    });
+    const { error: insertError } = await supabase
+      .from("attendance_sessions")
+      .insert({
+        school_id: schoolId,
+        class_id: classId,
+        subject_id: subjectId,
+        teacher_id: userId,
+        session_date: now.toLocaleDateString("en-CA"),
+        started_at: now.toISOString(),
+      });
 
-    if (error) {
-      setMessage(error.message);
+    if (insertError) {
+      setError(insertError.message);
     } else {
       setClassId("");
       setSubjectId("");
-      setMessage("Attendance session created successfully.");
+      setMessage("Attendance session created successfully!");
       await loadData();
     }
 
@@ -140,13 +260,24 @@ export default function AttendancePage() {
 
   function classLabel(id: string) {
     const item = classes.find((schoolClass) => schoolClass.id === id);
-    return item ? `${item.class_name} - ${item.section}` : "Unknown class";
+    return item
+      ? `${item.class_name} - ${item.section}`
+      : "Unknown class";
   }
 
   function subjectLabel(id: string) {
     return (
       subjects.find((subject) => subject.id === id)?.subject_name ||
       "Unknown subject"
+    );
+  }
+
+  if (loading) {
+    return (
+      <div className="flex min-h-[50vh] items-center justify-center gap-3 text-sm text-gray-500">
+        <Loader2 className="animate-spin" size={22} />
+        Loading attendance...
+      </div>
     );
   }
 
@@ -157,7 +288,9 @@ export default function AttendancePage() {
           Attendance Management
         </h1>
         <p className="mt-1 text-sm text-gray-500">
-          Create and manage class-wise, subject-wise attendance sessions.
+          {role === "teacher"
+            ? "Manage attendance for your assigned classes and subjects."
+            : "Create and manage class-wise, subject-wise attendance sessions."}
         </p>
       </section>
 
@@ -167,13 +300,21 @@ export default function AttendancePage() {
         </div>
       )}
 
+      {error && (
+        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {error}
+        </div>
+      )}
+
       <section className="rounded-2xl border border-[#E8EEE9] bg-white p-6 shadow-sm">
         <div className="mb-6 flex items-center gap-3">
           <div className="rounded-xl bg-emerald-100 p-3 text-emerald-700">
             <CalendarCheck size={24} />
           </div>
           <div>
-            <h2 className="font-bold text-[#193B32]">Start attendance</h2>
+            <h2 className="font-bold text-[#193B32]">
+              Start attendance
+            </h2>
             <p className="text-sm text-gray-500">
               Choose the class and subject for this session.
             </p>
@@ -187,7 +328,7 @@ export default function AttendancePage() {
               <select
                 required
                 value={classId}
-                onChange={(event) => setClassId(event.target.value)}
+                onChange={(event) => handleClassChange(event.target.value)}
                 className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
               >
                 <option value="">Select a class</option>
@@ -205,10 +346,11 @@ export default function AttendancePage() {
                 required
                 value={subjectId}
                 onChange={(event) => setSubjectId(event.target.value)}
-                className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                disabled={!classId}
+                className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 disabled:bg-gray-50 disabled:text-gray-400"
               >
                 <option value="">Select a subject</option>
-                {subjects.map((item) => (
+                {availableSubjects.map((item) => (
                   <option key={item.id} value={item.id}>
                     {item.subject_name}
                   </option>
@@ -219,7 +361,13 @@ export default function AttendancePage() {
 
           <button
             type="submit"
-            disabled={saving || loading || !classes.length || !subjects.length}
+            disabled={
+              saving ||
+              !classes.length ||
+              !availableSubjects.length ||
+              !classId ||
+              !subjectId
+            }
             className="inline-flex items-center gap-2 rounded-xl bg-[#087F5B] px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-emerald-900/10 transition hover:bg-[#066B4D] disabled:cursor-not-allowed disabled:opacity-50"
           >
             {saving ? (
@@ -230,11 +378,21 @@ export default function AttendancePage() {
             {saving ? "Starting..." : "Start session"}
           </button>
 
-          {!loading && (!classes.length || !subjects.length) && (
+          {!classes.length && (
             <p className="text-sm text-amber-700">
-              Add at least one class and one subject before starting attendance.
+              {role === "teacher"
+                ? "You don't have any class assignments yet. Contact your school administrator."
+                : "Add at least one class before starting attendance."}
             </p>
           )}
+
+          {classes.length > 0 &&
+            !availableSubjects.length &&
+            classId && (
+              <p className="text-sm text-amber-700">
+                No subjects are assigned to this class.
+              </p>
+            )}
         </form>
       </section>
 
@@ -242,16 +400,13 @@ export default function AttendancePage() {
         <div className="border-b border-gray-100 p-5">
           <h2 className="font-bold text-[#193B32]">Recent sessions</h2>
           <p className="mt-1 text-xs text-gray-500">
-            Your latest attendance sessions
+            {role === "teacher"
+              ? "Your latest attendance sessions"
+              : "Latest school attendance sessions"}
           </p>
         </div>
 
-        {loading ? (
-          <div className="flex items-center justify-center gap-3 p-12 text-sm text-gray-500">
-            <Loader2 className="animate-spin" size={20} />
-            Loading sessions...
-          </div>
-        ) : sessions.length === 0 ? (
+        {sessions.length === 0 ? (
           <div className="p-12 text-center">
             <CalendarCheck className="mx-auto text-gray-300" size={38} />
             <p className="mt-3 font-semibold text-gray-700">
