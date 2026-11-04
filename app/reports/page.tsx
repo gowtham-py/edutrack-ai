@@ -22,6 +22,18 @@ type ReportStats = {
   leave: number;
 };
 
+type AttendanceDetail = {
+  id: string;
+  studentName: string;
+  admissionNumber: string;
+  className: string;
+  subjectName: string;
+  teacherName: string;
+  status: string;
+  markedAt: string;
+  sessionDate: string;
+};
+
 const initialStats: ReportStats = {
   sessions: 0,
   present: 0,
@@ -33,6 +45,7 @@ const initialStats: ReportStats = {
 
 export default function ReportsPage() {
   const [stats, setStats] = useState(initialStats);
+  const [details, setDetails] = useState<AttendanceDetail[]>([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
 
@@ -51,7 +64,7 @@ export default function ReportsPage() {
 
       const { data: profile, error: profileError } = await supabase
         .from("profiles")
-        .select("school_id")
+        .select("school_id, role")
         .eq("user_id", authData.user.id)
         .maybeSingle();
 
@@ -61,10 +74,20 @@ export default function ReportsPage() {
         return;
       }
 
-      const { data: sessions, error: sessionError } = await supabase
+      let sessionQuery = supabase
         .from("attendance_sessions")
-        .select("id")
-        .eq("school_id", profile.school_id);
+        .select(
+          "id, session_date, started_at, class_id, subject_id, teacher_id"
+        )
+        .eq("school_id", profile.school_id)
+        .order("started_at", { ascending: false })
+        .limit(200);
+
+      if (profile.role === "teacher") {
+        sessionQuery = sessionQuery.eq("teacher_id", authData.user.id);
+      }
+
+      const { data: sessions, error: sessionError } = await sessionQuery;
 
       if (sessionError) {
         setMessage(sessionError.message);
@@ -72,17 +95,19 @@ export default function ReportsPage() {
         return;
       }
 
-      const sessionIds = (sessions || []).map((session) => session.id);
+      const sessionList = sessions || [];
+      const sessionIds = sessionList.map((session) => session.id);
 
       if (sessionIds.length === 0) {
         setStats(initialStats);
+        setDetails([]);
         setLoading(false);
         return;
       }
 
       const { data: records, error: recordsError } = await supabase
         .from("attendance_records")
-        .select("status")
+        .select("id, session_id, student_id, status, marked_by, marked_at")
         .in("session_id", sessionIds);
 
       if (recordsError) {
@@ -92,6 +117,130 @@ export default function ReportsPage() {
       }
 
       const rows = records || [];
+
+      const studentIds = [...new Set(rows.map((row) => row.student_id))];
+      const teacherIds = [
+        ...new Set(
+          rows
+            .map((row) => row.marked_by)
+            .filter((id): id is string => Boolean(id))
+        ),
+      ];
+      const classIds = [
+        ...new Set(sessionList.map((session) => session.class_id)),
+      ];
+      const subjectIds = [
+        ...new Set(sessionList.map((session) => session.subject_id)),
+      ];
+
+      const [
+        studentsResult,
+        teachersResult,
+        classesResult,
+        subjectsResult,
+      ] = await Promise.all([
+        studentIds.length
+          ? supabase
+              .from("students")
+              .select("id, full_name, admission_number")
+              .in("id", studentIds)
+          : Promise.resolve({ data: [], error: null }),
+
+        teacherIds.length
+          ? supabase
+              .from("profiles")
+              .select("user_id, full_name")
+              .in("user_id", teacherIds)
+          : Promise.resolve({ data: [], error: null }),
+
+        classIds.length
+          ? supabase
+              .from("classes")
+              .select("id, class_name, section")
+              .in("id", classIds)
+          : Promise.resolve({ data: [], error: null }),
+
+        subjectIds.length
+          ? supabase
+              .from("subjects")
+              .select("id, subject_name")
+              .in("id", subjectIds)
+          : Promise.resolve({ data: [], error: null }),
+      ]);
+
+      if (
+        studentsResult.error ||
+        teachersResult.error ||
+        classesResult.error ||
+        subjectsResult.error
+      ) {
+        setMessage(
+          studentsResult.error?.message ||
+            teachersResult.error?.message ||
+            classesResult.error?.message ||
+            subjectsResult.error?.message ||
+            "Unable to load report details."
+        );
+        setLoading(false);
+        return;
+      }
+
+      const studentMap = new Map(
+        (studentsResult.data || []).map((student) => [
+          student.id,
+          student,
+        ])
+      );
+
+      const teacherMap = new Map(
+        (teachersResult.data || []).map((teacher) => [
+          teacher.user_id,
+          teacher.full_name,
+        ])
+      );
+
+      const classMap = new Map(
+        (classesResult.data || []).map((item) => [
+          item.id,
+          `${item.class_name} - ${item.section}`,
+        ])
+      );
+
+      const subjectMap = new Map(
+        (subjectsResult.data || []).map((item) => [
+          item.id,
+          item.subject_name,
+        ])
+      );
+
+      const sessionMap = new Map(
+        sessionList.map((session) => [session.id, session])
+      );
+
+      const reportDetails: AttendanceDetail[] = rows.map((record) => {
+        const student = studentMap.get(record.student_id);
+        const session = sessionMap.get(record.session_id);
+
+        return {
+          id: record.id,
+          studentName: student?.full_name || "Unknown student",
+          admissionNumber: student?.admission_number || "—",
+          className: session
+            ? classMap.get(session.class_id) || "Unknown class"
+            : "Unknown class",
+          subjectName: session
+            ? subjectMap.get(session.subject_id) || "Unknown subject"
+            : "Unknown subject",
+          teacherName: record.marked_by
+            ? teacherMap.get(record.marked_by) || "Unknown teacher"
+            : "—",
+          status: record.status,
+          markedAt: record.marked_at,
+          sessionDate: session?.session_date || "—",
+        };
+      });
+
+      setDetails(reportDetails);
 
       setStats({
         sessions: sessionIds.length,
@@ -109,18 +258,22 @@ export default function ReportsPage() {
   }, []);
 
   const totalRecords =
-    stats.present + stats.absent + stats.late + stats.halfDay + stats.leave;
+    stats.present +
+    stats.absent +
+    stats.late +
+    stats.halfDay +
+    stats.leave;
 
   const eligibleRecords = totalRecords - stats.leave;
 
-const attendanceRate =
-  eligibleRecords > 0
-    ? Math.round(
-        ((stats.present + stats.late + stats.halfDay * 0.5) /
-          eligibleRecords) *
-          100
-      )
-    : 0;
+  const attendanceRate =
+    eligibleRecords > 0
+      ? Math.round(
+          ((stats.present + stats.late + stats.halfDay * 0.5) /
+            eligibleRecords) *
+            100
+        )
+      : 0;
 
   const cards = [
     {
@@ -155,6 +308,29 @@ const attendanceRate =
     },
   ];
 
+  function statusStyle(status: string) {
+    switch (status) {
+      case "present":
+        return "bg-emerald-100 text-emerald-700";
+      case "absent":
+        return "bg-red-100 text-red-700";
+      case "late":
+        return "bg-amber-100 text-amber-700";
+      case "half_day":
+        return "bg-violet-100 text-violet-700";
+      case "approved_leave":
+        return "bg-sky-100 text-sky-700";
+      default:
+        return "bg-gray-100 text-gray-700";
+    }
+  }
+
+  function statusLabel(status: string) {
+    return status.replaceAll("_", " ").replace(/\b\w/g, (letter) =>
+      letter.toUpperCase()
+    );
+  }
+
   return (
     <div className="space-y-7">
       <section>
@@ -162,7 +338,7 @@ const attendanceRate =
           Attendance Reports
         </h1>
         <p className="mt-1 text-sm text-gray-500">
-          A summary of attendance records across your school.
+          A summary and detailed view of saved attendance records.
         </p>
       </section>
 
@@ -183,7 +359,9 @@ const attendanceRate =
             <div className="rounded-2xl border border-[#E8EEE9] bg-white p-5 shadow-sm">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm text-gray-500">Attendance sessions</p>
+                  <p className="text-sm text-gray-500">
+                    Attendance sessions
+                  </p>
                   <p className="mt-2 text-3xl font-bold text-[#193B32]">
                     {stats.sessions}
                   </p>
@@ -197,7 +375,9 @@ const attendanceRate =
             <div className="rounded-2xl border border-[#E8EEE9] bg-white p-5 shadow-sm">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm text-gray-500">Overall attendance rate</p>
+                  <p className="text-sm text-gray-500">
+                    Overall attendance rate
+                  </p>
                   <p className="mt-2 text-3xl font-bold text-[#193B32]">
                     {attendanceRate}%
                   </p>
@@ -247,11 +427,83 @@ const attendanceRate =
             </div>
           </section>
 
+          <section className="overflow-hidden rounded-2xl border border-[#E8EEE9] bg-white shadow-sm">
+            <div className="border-b border-gray-100 p-5">
+              <h2 className="font-bold text-[#193B32]">
+                Detailed attendance records
+              </h2>
+              <p className="mt-1 text-sm text-gray-500">
+                Student names, admission numbers, teachers and attendance status.
+              </p>
+            </div>
+
+            {details.length === 0 ? (
+              <div className="p-10 text-center text-sm text-gray-500">
+                No detailed attendance records found yet.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[900px] text-left text-sm">
+                  <thead className="bg-gray-50 text-xs uppercase text-gray-500">
+                    <tr>
+                      <th className="px-5 py-4">Student</th>
+                      <th className="px-5 py-4">Admission No.</th>
+                      <th className="px-5 py-4">Class</th>
+                      <th className="px-5 py-4">Subject</th>
+                      <th className="px-5 py-4">Status</th>
+                      <th className="px-5 py-4">Marked by</th>
+                      <th className="px-5 py-4">Date & time</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {details.map((record) => (
+                      <tr key={record.id} className="hover:bg-gray-50">
+                        <td className="px-5 py-4 font-semibold text-[#193B32]">
+                          {record.studentName}
+                        </td>
+                        <td className="px-5 py-4 text-gray-600">
+                          {record.admissionNumber}
+                        </td>
+                        <td className="px-5 py-4 text-gray-600">
+                          {record.className}
+                        </td>
+                        <td className="px-5 py-4 text-gray-600">
+                          {record.subjectName}
+                        </td>
+                        <td className="px-5 py-4">
+                          <span
+                            className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${statusStyle(record.status)}`}
+                          >
+                            {statusLabel(record.status)}
+                          </span>
+                        </td>
+                        <td className="px-5 py-4 text-gray-600">
+                          {record.teacherName}
+                        </td>
+                        <td className="px-5 py-4 text-gray-600">
+                          <p>{record.sessionDate}</p>
+                          <p className="mt-1 text-xs text-gray-400">
+                            {record.markedAt
+                              ? new Date(record.markedAt).toLocaleString()
+                              : "—"}
+                          </p>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <div className="border-t border-gray-100 px-5 py-3 text-xs text-gray-400">
+              Showing records from the latest 200 attendance sessions.
+            </div>
+          </section>
+
           <p className="text-xs leading-5 text-gray-400">
-            This is a school-wide summary of saved attendance records, not a
-            student-level percentage report. Approved leave is excluded from
-            the attendance-rate calculation. Detailed date, class and student
-            filters and PDF/Excel exports will be added later.
+            Approved leave is excluded from the attendance-rate calculation.
+            Detailed reports currently show the latest 200 sessions. Date
+            filters and PDF/Excel exports can be added later.
           </p>
         </>
       )}
