@@ -107,12 +107,19 @@ const adminProfile = profileData as {
     }
 
     // Find the student inside the administrator's own school.
-    const { data: student, error: studentError } = await supabase
-      .from("students")
-      .select("id, school_id, admission_number, full_name")
-      .eq("id", studentId)
-      .eq("school_id", adminProfile.school_id)
-      .single();
+    const { data: studentData, error: studentError } = await supabase
+  .from("students")
+  .select("id, school_id, admission_number, full_name")
+  .eq("id", studentId)
+  .eq("school_id", adminProfile.school_id)
+  .single();
+
+const student = studentData as {
+  id: string;
+  school_id: string;
+  admission_number: string;
+  full_name: string;
+} | null;
 
     if (studentError || !student) {
       return NextResponse.json(
