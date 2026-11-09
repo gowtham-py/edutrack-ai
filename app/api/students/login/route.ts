@@ -34,37 +34,38 @@ export async function POST(request: Request) {
         : "";
 
     const password =
-      typeof body.password === "string"
-        ? body.password
-        : "";
+      typeof body.password === "string" ? body.password : "";
 
     if (!schoolCode || !admissionNumber || !password) {
       return NextResponse.json(
-        { error: "School code, admission number and password are required." },
+        {
+          error:
+            "School code, admission number and password are required.",
+        },
         { status: 400 }
       );
     }
 
-    if (schoolCode.length > 100 || admissionNumber.length > 100) {
+    if (
+      schoolCode.length > 100 ||
+      admissionNumber.length > 100 ||
+      password.length > 72
+    ) {
       return NextResponse.json(
         { error: "Invalid login details." },
         { status: 400 }
       );
     }
 
-    // Privileged client: used only for server-side record lookup.
-    const admin = createClient(
-      supabaseUrl,
-      secretKey,
-      {
-        auth: {
-          autoRefreshToken: false,
-          persistSession: false,
-        },
-      }
-    ) as AdminClient;
+    // Server-side privileged client.
+    const admin = createClient(supabaseUrl, secretKey, {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false,
+      },
+    }) as AdminClient;
 
-    // Find the school using its school code.
+    // Find school.
     const { data: school, error: schoolError } = await admin
       .from("schools")
       .select("id, name, school_code")
@@ -78,22 +79,35 @@ export async function POST(request: Request) {
       );
     }
 
-    // Find the student inside that school.
-    const { data: student, error: studentError } = await admin
+    // Find student using the normalized admission number.
+    const { data: students, error: studentError } = await admin
       .from("students")
       .select("id, school_id, admission_number, full_name")
-      .eq("school_id", school.id)
-      .eq("admission_number", admissionNumber)
-      .maybeSingle();
+      .eq("school_id", school.id);
 
-    if (studentError || !student) {
+    if (studentError || !students) {
+      console.error("Student lookup error:", studentError);
+
+      return NextResponse.json(
+        { error: "Unable to verify student details." },
+        { status: 500 }
+      );
+    }
+
+    const student = students.find(
+      (item: any) =>
+        String(item.admission_number).trim().toUpperCase() ===
+        admissionNumber
+    );
+
+    if (!student) {
       return NextResponse.json(
         { error: "Invalid school code, admission number or password." },
         { status: 401 }
       );
     }
 
-    // Confirm that this student has an account.
+    // Confirm linked student account.
     const { data: account, error: accountError } = await admin
       .from("student_accounts")
       .select("auth_user_id")
@@ -101,14 +115,23 @@ export async function POST(request: Request) {
       .eq("school_id", school.id)
       .maybeSingle();
 
-    if (accountError || !account?.auth_user_id) {
+    if (accountError) {
+      console.error("Student account lookup error:", accountError);
+
       return NextResponse.json(
-        { error: "Invalid school code, admission number or password." },
+        { error: "Unable to verify student account." },
+        { status: 500 }
+      );
+    }
+
+    if (!account?.auth_user_id) {
+      return NextResponse.json(
+        { error: "No login account exists for this student." },
         { status: 401 }
       );
     }
 
-    // Recreate the same synthetic email used during account creation.
+    // Generate the same synthetic email used during account creation.
     const emailHash = createHash("sha256")
       .update(`${school.id}:${admissionNumber}`)
       .digest("hex");
@@ -116,17 +139,13 @@ export async function POST(request: Request) {
     const syntheticEmail =
       `student-${emailHash}@students.edutrack.invalid`;
 
-    // Authenticate using the public Supabase key.
-    const authClient = createClient(
-      supabaseUrl,
-      publishableKey,
-      {
-        auth: {
-          autoRefreshToken: false,
-          persistSession: false,
-        },
-      }
-    );
+    // Authenticate student.
+    const authClient = createClient(supabaseUrl, publishableKey, {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false,
+      },
+    });
 
     const {
       data: authData,
@@ -143,7 +162,7 @@ export async function POST(request: Request) {
       );
     }
 
-    // Ensure the authenticated user matches the linked student account.
+    // Verify authenticated user belongs to this student.
     if (authData.user.id !== account.auth_user_id) {
       await authClient.auth.signOut();
 
@@ -153,26 +172,32 @@ export async function POST(request: Request) {
       );
     }
 
+    // Return tokens at the top level for the unified login page.
     return NextResponse.json({
-  success: true,
-  message: "Student login successful.",
+      success: true,
+      message: "Student login successful.",
 
-  student: {
-    id: student.id,
-    fullName: student.full_name,
-    admissionNumber: student.admission_number,
-    schoolName: school.name,
-  },
+      student: {
+        id: student.id,
+        fullName: student.full_name,
+        admissionNumber: student.admission_number,
+        schoolName: school.name,
+      },
 
-  // Top-level tokens for the unified login page
-  access_token: authData.session.access_token,
-  refresh_token: authData.session.refresh_token,
+      access_token: authData.session.access_token,
+      refresh_token: authData.session.refresh_token,
 
-  // Keep nested session for compatibility
-  session: {
-    access_token: authData.session.access_token,
-    refresh_token: authData.session.refresh_token,
-  },
-});
+      session: {
+        access_token: authData.session.access_token,
+        refresh_token: authData.session.refresh_token,
+      },
+    });
+  } catch (error) {
+    console.error("Student login error:", error);
+
+    return NextResponse.json(
+      { error: "An unexpected login error occurred." },
+      { status: 500 }
+    );
   }
 }
