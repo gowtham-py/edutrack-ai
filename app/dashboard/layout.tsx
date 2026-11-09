@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useEffect, useState } from "react";
@@ -18,6 +17,7 @@ import {
   X,
   School,
   ClipboardList,
+  Wallet,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 
@@ -25,7 +25,7 @@ const navigation = [
   { name: "Overview", href: "/dashboard", icon: LayoutDashboard, roles: ["school_admin", "super_admin", "teacher"] },
   { name: "Students", href: "/dashboard/students", icon: GraduationCap, roles: ["school_admin", "super_admin"] },
   { name: "Teachers", href: "/dashboard/teachers", icon: Users, roles: ["school_admin", "super_admin"] },
-    {
+  {
     name: "Teacher Assignments",
     href: "/dashboard/teacher-assignments",
     icon: ClipboardList,
@@ -33,6 +33,12 @@ const navigation = [
   },
   { name: "Classes", href: "/dashboard/classes", icon: School, roles: ["school_admin", "super_admin"] },
   { name: "Subjects", href: "/dashboard/subjects", icon: BookOpen, roles: ["school_admin", "super_admin"] },
+  {
+    name: "Fees",
+    href: "/dashboard/fees",
+    icon: Wallet,
+    roles: ["school_admin", "super_admin"],
+  },
   { name: "Attendance", href: "/dashboard/attendance", icon: CalendarCheck, roles: ["school_admin", "super_admin", "teacher"] },
   { name: "Reports", href: "/dashboard/reports", icon: BarChart3, roles: ["school_admin", "super_admin", "teacher"] },
   { name: "Settings", href: "/dashboard/settings", icon: Settings, roles: ["school_admin", "super_admin"] },
