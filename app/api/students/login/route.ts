@@ -154,25 +154,25 @@ export async function POST(request: Request) {
     }
 
     return NextResponse.json({
-      success: true,
-      message: "Student login successful.",
-      student: {
-        id: student.id,
-        fullName: student.full_name,
-        admissionNumber: student.admission_number,
-        schoolName: school.name,
-      },
-      session: {
-        access_token: authData.session.access_token,
-        refresh_token: authData.session.refresh_token,
-      },
-    });
-  } catch (error) {
-    console.error("Student login error:", error);
+  success: true,
+  message: "Student login successful.",
 
-    return NextResponse.json(
-      { error: "An unexpected login error occurred." },
-      { status: 500 }
-    );
+  student: {
+    id: student.id,
+    fullName: student.full_name,
+    admissionNumber: student.admission_number,
+    schoolName: school.name,
+  },
+
+  // Top-level tokens for the unified login page
+  access_token: authData.session.access_token,
+  refresh_token: authData.session.refresh_token,
+
+  // Keep nested session for compatibility
+  session: {
+    access_token: authData.session.access_token,
+    refresh_token: authData.session.refresh_token,
+  },
+});
   }
 }
