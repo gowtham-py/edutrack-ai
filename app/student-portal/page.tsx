@@ -230,13 +230,21 @@ export default function StudentPortalPage() {
 
       setStudent(studentData as unknown as Student);
       setRecords(sortedRecords);
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Unable to load your student dashboard."
-      );
-    } finally {
+    } catch (err: unknown) {
+  console.error("Student dashboard loading error:", err);
+
+  let message = "Unable to load your student dashboard.";
+
+  if (
+    typeof err === "object" &&
+    err !== null &&
+    "message" in err
+  ) {
+    message = String(err.message);
+  }
+
+  setError(message);
+} finally {
       setLoading(false);
       setRefreshing(false);
     }
