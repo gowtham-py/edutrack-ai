@@ -53,11 +53,17 @@ export async function POST(request: Request) {
     }
 
     // Verify the administrator's school.
-    const { data: adminProfile, error: profileError } = await supabase
-      .from("profiles")
-      .select("user_id, school_id, role")
-      .eq("user_id", user.id)
-      .single();
+   const { data: profileData, error: profileError } = await supabase
+  .from("profiles")
+  .select("user_id, school_id, role")
+  .eq("user_id", user.id)
+  .single();
+
+const adminProfile = profileData as {
+  user_id: string;
+  school_id: string | null;
+  role: string;
+} | null;
 
     if (
       profileError ||
