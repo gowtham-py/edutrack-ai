@@ -370,14 +370,18 @@ export async function POST(request: NextRequest) {
     }
 
     return NextResponse.json({
-      success: true,
-      message: "PayPal payment verified successfully.",
-      receipt: result,
-      orderId,
-      captureId: capture.id,
-      amountUSD: capturedAmount.toFixed(2),
-      currency: "USD",
-    });
+  success: true,
+  message: "PayPal payment verified successfully.",
+  receipt: result,
+  receiptNumber:
+    result?.receipt_number || result?.receiptNumber || null,
+  paidAmount: result?.paid_amount ?? null,
+  invoiceStatus: result?.invoice_status ?? null,
+  orderId,
+  captureId: capture.id,
+  amountUSD: capturedAmount.toFixed(2),
+  currency: "USD",
+});
 
   } catch (error) {
     console.error("PayPal capture API error:", error);
