@@ -752,6 +752,8 @@ export default function FeesPage() {
                   <th className="px-4 py-3">Billing Period</th>
                   <th className="px-4 py-3">Due Date</th>
                   <th className="px-4 py-3 text-right">Total</th>
+                  <th className="px-4 py-3 text-right">Paid</th>
+                  <th className="px-4 py-3 text-right">Balance</th>
                   <th className="px-4 py-3">Status</th>
                   <th className="px-4 py-3 text-right">Action</th>
                 </tr>
@@ -766,8 +768,23 @@ export default function FeesPage() {
                     <td className="px-4 py-4 text-sm text-slate-700">{studentLabel(invoice.student_id)}</td>
                     <td className="px-4 py-4 text-sm text-slate-600">{invoice.billing_period}</td>
                     <td className="px-4 py-4 text-sm text-slate-600">{invoice.due_date ? new Date(`${invoice.due_date}T00:00:00`).toLocaleDateString("en-IN") : "Not set"}</td>
-                    <td className="px-4 py-4 text-right font-bold text-slate-900">{formatMoney(Number(invoice.total_amount))}</td>
-                    <td className="px-4 py-4"><StatusBadge status={invoice.status} /></td>
+                    <td className="px-4 py-4 text-right font-bold text-slate-900">
+  {formatMoney(Number(invoice.total_amount))}
+</td>
+<td className="px-4 py-4 text-right font-semibold text-emerald-700">
+  {formatMoney(Number(invoice.paid_amount || 0))}
+</td>
+<td className="px-4 py-4 text-right font-bold text-amber-700">
+  {formatMoney(
+    Math.max(
+      0,
+      Number(invoice.total_amount || 0) - Number(invoice.paid_amount || 0)
+    )
+  )}
+</td>
+<td className="px-4 py-4">
+  <StatusBadge status={invoice.status} />
+</td>
                     <td className="px-4 py-4 text-right">
                       <button onClick={() => openInvoice(invoice)} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-emerald-50 hover:text-emerald-700">
                         <Eye size={15} /> View
