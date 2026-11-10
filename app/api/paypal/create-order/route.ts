@@ -7,7 +7,7 @@ export const runtime = "nodejs";
 
 export async function POST(request: NextRequest) {
   try {
-    // 1. Verify the student's Supabase login.
+    // 1. Verify authenticated student.
     const authorization = request.headers.get("authorization");
     const accessToken = authorization?.replace(/^Bearer\s+/i, "");
 
@@ -40,7 +40,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 2. Find the student linked to this authenticated account.
+    // 2. Find the authenticated student's account.
     const { data: account, error: accountError } =
       await supabaseAdmin
         .from("student_accounts")
@@ -74,6 +74,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    if (invoice.status === "cancelled") {
+      return NextResponse.json(
+        { error: "This invoice has been cancelled." },
+        { status: 400 }
+      );
+    }
+
     // 4. Calculate the outstanding balance on the server.
     const outstanding =
       Number(invoice.total_amount) - Number(invoice.paid_amount);
@@ -85,28 +92,32 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Demo conversion rate: INR per 1 USD.
-    const rate = Number(process.env.PAYPAL_DEMO_INR_PER_USD);
+    // 5. Read the configured demo conversion rate.
+    const configuredRate = Number(
+      process.env.PAYPAL_DEMO_INR_PER_USD
+    );
 
-    if (!Number.isFinite(rate) || rate <= 0) {
+    if (!Number.isFinite(configuredRate) || configuredRate <= 0) {
       return NextResponse.json(
         { error: "PayPal demo exchange rate is not configured." },
         { status: 500 }
       );
     }
 
-    const usdAmount = (outstanding / rate).toFixed(2);
+    const exchangeRate = Number(configuredRate.toFixed(4));
+    const usdAmount = (outstanding / exchangeRate).toFixed(2);
 
     if (Number(usdAmount) < 0.01) {
       return NextResponse.json(
-        { error: "The converted payment is below PayPal's minimum." },
+        { error: "Converted payment is below PayPal's minimum." },
         { status: 400 }
       );
     }
 
-    // 5. Get PayPal Sandbox access token.
+    // 6. Connect to PayPal Sandbox.
     const clientId = process.env.PAYPAL_CLIENT_ID;
     const clientSecret = process.env.PAYPAL_CLIENT_SECRET;
+
     const paypalBase = "https://api-m.sandbox.paypal.com";
 
     if (!clientId || !clientSecret) {
@@ -137,13 +148,14 @@ export async function POST(request: NextRequest) {
 
     if (!tokenResponse.ok || !tokenData.access_token) {
       console.error("PayPal token error:", tokenData);
+
       return NextResponse.json(
         { error: "Unable to connect to PayPal." },
         { status: 502 }
       );
     }
 
-    // 6. Create the PayPal order using server-calculated values.
+    // 7. Create the PayPal order.
     const orderResponse = await fetch(
       `${paypalBase}/v2/checkout/orders`,
       {
@@ -176,9 +188,33 @@ export async function POST(request: NextRequest) {
 
     if (!orderResponse.ok || !orderData.id) {
       console.error("PayPal order error:", orderData);
+
       return NextResponse.json(
         { error: "Unable to create PayPal order." },
         { status: 502 }
+      );
+    }
+
+    // 8. Save the PayPal order ownership and invoice details.
+    const { error: trackingError } = await supabaseAdmin
+      .from("paypal_fee_orders")
+      .insert({
+        paypal_order_id: orderData.id,
+        school_id: invoice.school_id,
+        invoice_id: invoice.id,
+        student_id: account.student_id,
+        amount_inr: outstanding,
+        amount_usd: Number(usdAmount),
+        exchange_rate: exchangeRate,
+        status: "created",
+      });
+
+    if (trackingError) {
+      console.error("PayPal order tracking error:", trackingError);
+
+      return NextResponse.json(
+        { error: "Unable to securely save payment order." },
+        { status: 500 }
       );
     }
 
@@ -186,7 +222,7 @@ export async function POST(request: NextRequest) {
       orderId: orderData.id,
       amountINR: outstanding.toFixed(2),
       amountUSD: usdAmount,
-      exchangeRate: rate,
+      exchangeRate,
       currency: "USD",
     });
   } catch (error) {
