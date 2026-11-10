@@ -87,6 +87,7 @@ export default function StudentFees() {
         const { data: account, error: accountError } = await supabase
           .from("student_accounts")
           .select("student_id")
+          .eq("auth_user_id", session.user.id)
           .maybeSingle();
 
         if (accountError) throw accountError;
