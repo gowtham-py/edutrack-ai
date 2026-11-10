@@ -200,6 +200,42 @@ export default function FeesPage() {
   useEffect(() => {
     loadData();
   }, [loadData]);
+  // Automatically refresh invoice payments every 10 seconds.
+useEffect(() => {
+  if (!schoolId) return;
+
+  const refreshInvoices = async () => {
+    const { data, error } = await supabase
+      .from("fee_invoices")
+      .select(
+        "id, student_id, invoice_number, academic_year, billing_period, total_amount, paid_amount, due_date, status, created_at"
+      )
+      .eq("school_id", schoolId)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error("Automatic invoice refresh failed:", error);
+      return;
+    }
+
+    setInvoices((data || []) as Invoice[]);
+  };
+
+  const intervalId = window.setInterval(() => {
+    void refreshInvoices();
+  }, 10000);
+
+  const handleFocus = () => {
+    void refreshInvoices();
+  };
+
+  window.addEventListener("focus", handleFocus);
+
+  return () => {
+    window.clearInterval(intervalId);
+    window.removeEventListener("focus", handleFocus);
+  };
+}, [schoolId]);
 
   async function addCategory(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
