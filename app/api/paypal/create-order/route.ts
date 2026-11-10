@@ -7,9 +7,9 @@ export const runtime = "nodejs";
 
 export async function POST(request: NextRequest) {
   try {
-    // 1. Verify authenticated student.
+    // 1. Verify the student's login session.
     const authorization = request.headers.get("authorization");
-    const accessToken = authorization?.replace(/^Bearer\s+/i, "");
+    const accessToken = authorization?.replace(/^Bearer\s+/i, "").trim();
 
     if (!accessToken) {
       return NextResponse.json(
@@ -30,17 +30,18 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // 2. Validate the invoice ID.
     const body = await request.json();
-    const invoiceId = body.invoiceId;
+    const invoiceId = body?.invoiceId;
 
-    if (typeof invoiceId !== "string" || !invoiceId) {
+    if (typeof invoiceId !== "string" || !invoiceId.trim()) {
       return NextResponse.json(
         { error: "Invalid invoice." },
         { status: 400 }
       );
     }
 
-    // 2. Find the authenticated student's account.
+    // 3. Find the authenticated student's account.
     const { data: account, error: accountError } =
       await supabaseAdmin
         .from("student_accounts")
@@ -49,25 +50,29 @@ export async function POST(request: NextRequest) {
         .maybeSingle();
 
     if (accountError || !account) {
+      console.error("Student account lookup error:", accountError);
+
       return NextResponse.json(
         { error: "Student account not found." },
         { status: 403 }
       );
     }
 
-    // 3. Fetch only this student's invoice.
+    // 4. Fetch only this student's invoice.
     const { data: invoice, error: invoiceError } =
       await supabaseAdmin
         .from("fee_invoices")
         .select(
           "id, school_id, student_id, invoice_number, total_amount, paid_amount, status"
         )
-        .eq("id", invoiceId)
+        .eq("id", invoiceId.trim())
         .eq("student_id", account.student_id)
         .eq("school_id", account.school_id)
         .maybeSingle();
 
     if (invoiceError || !invoice) {
+      console.error("Invoice lookup error:", invoiceError);
+
       return NextResponse.json(
         { error: "Invoice not found or access denied." },
         { status: 404 }
@@ -81,18 +86,34 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 4. Calculate outstanding balance on the server.
-    const outstanding =
-      Number(invoice.total_amount) - Number(invoice.paid_amount);
+    // 5. Calculate the outstanding amount securely.
+    const totalAmount = Number(invoice.total_amount);
+    const paidAmount = Number(invoice.paid_amount);
 
-    if (!Number.isFinite(outstanding) || outstanding <= 0) {
+    if (
+      !Number.isFinite(totalAmount) ||
+      !Number.isFinite(paidAmount) ||
+      totalAmount <= 0 ||
+      paidAmount < 0
+    ) {
+      return NextResponse.json(
+        { error: "Invalid invoice amount." },
+        { status: 400 }
+      );
+    }
+
+    const outstanding = Number(
+      (totalAmount - paidAmount).toFixed(2)
+    );
+
+    if (outstanding <= 0) {
       return NextResponse.json(
         { error: "This invoice has no outstanding balance." },
         { status: 400 }
       );
     }
 
-    // 5. Read demo conversion rate.
+    // 6. Read the demo INR-to-USD exchange rate.
     const configuredRate = Number(
       process.env.PAYPAL_DEMO_INR_PER_USD
     );
@@ -114,12 +135,16 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 6. Connect to PayPal.
+    // 7. Configure PayPal Sandbox or Production.
     const clientId = process.env.PAYPAL_CLIENT_ID;
     const clientSecret = process.env.PAYPAL_CLIENT_SECRET;
 
+    const paypalEnvironment = (
+      process.env.PAYPAL_ENV || "sandbox"
+    ).trim().toLowerCase();
+
     const paypalBase =
-      process.env.PAYPAL_ENV === "production"
+      paypalEnvironment === "production"
         ? "https://api-m.paypal.com"
         : "https://api-m.sandbox.paypal.com";
 
@@ -130,6 +155,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // 8. Get PayPal access token.
     const credentials = Buffer.from(
       `${clientId}:${clientSecret}`
     ).toString("base64");
@@ -158,16 +184,16 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 7. Configure checkout return URLs.
-    // Use the deployed EduTrack AI domain, not an untrusted Host header.
-    const appUrl =
+    // 9. Configure the correct deployed return URLs.
+    const appUrl = (
       process.env.NEXT_PUBLIC_APP_URL ||
-      "https://edutrack-ai-98ka.vercel.app";
+      "https://edutrack-ai-98ka.vercel.app"
+    ).replace(/\/+$/, "");
 
     const returnUrl = `${appUrl}/student-portal?paypal=success`;
     const cancelUrl = `${appUrl}/student-portal?paypal=cancel`;
 
-    // 8. Create PayPal order.
+    // 10. Create the PayPal order in USD.
     const orderResponse = await fetch(
       `${paypalBase}/v2/checkout/orders`,
       {
@@ -179,18 +205,21 @@ export async function POST(request: NextRequest) {
         },
         body: JSON.stringify({
           intent: "CAPTURE",
+
           purchase_units: [
             {
               reference_id: invoice.id,
               custom_id: invoice.id,
               invoice_id: invoice.invoice_number,
               description: `EduTrack AI fee invoice ${invoice.invoice_number}`,
+
               amount: {
                 currency_code: "USD",
                 value: usdAmount,
               },
             },
           ],
+
           application_context: {
             brand_name: "EduTrack AI",
             landing_page: "LOGIN",
@@ -206,15 +235,19 @@ export async function POST(request: NextRequest) {
     const orderData = await orderResponse.json();
 
     if (!orderResponse.ok || !orderData.id) {
-      console.error("PayPal order error:", orderData);
+      console.error("PayPal order creation error:", orderData);
 
       return NextResponse.json(
-        { error: "Unable to create PayPal order." },
+        {
+          error:
+            orderData?.message ||
+            "Unable to create PayPal order.",
+        },
         { status: 502 }
       );
     }
 
-    // 9. Find PayPal approval link.
+    // 11. Get the PayPal approval URL.
     const approvalUrl = orderData.links?.find(
       (link: { rel: string; href: string }) =>
         link.rel === "approve"
@@ -229,7 +262,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 10. Save secure order ownership.
+    // 12. Save order ownership securely in Supabase.
     const { error: trackingError } = await supabaseAdmin
       .from("paypal_fee_orders")
       .insert({
@@ -252,6 +285,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // 13. Return checkout details to the frontend.
     return NextResponse.json({
       orderId: orderData.id,
       approvalUrl,
@@ -260,11 +294,14 @@ export async function POST(request: NextRequest) {
       exchangeRate,
       currency: "USD",
     });
+
   } catch (error) {
     console.error("PayPal create order error:", error);
 
     return NextResponse.json(
-      { error: "Something went wrong while creating the payment." },
+      {
+        error: "Something went wrong while creating the payment.",
+      },
       { status: 500 }
     );
   }
