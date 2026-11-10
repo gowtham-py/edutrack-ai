@@ -2,6 +2,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import {
   Activity,
@@ -80,25 +81,11 @@ function getStatus(status: string) {
 function getStatusStyle(status: string) {
   const value = status.toLowerCase();
 
-  if (value === "present") {
-    return "bg-emerald-50 text-emerald-700";
-  }
-
-  if (value === "absent") {
-    return "bg-red-50 text-red-700";
-  }
-
-  if (value === "late") {
-    return "bg-amber-50 text-amber-700";
-  }
-
-  if (value === "half_day") {
-    return "bg-blue-50 text-blue-700";
-  }
-
-  if (value === "approved_leave") {
-    return "bg-purple-50 text-purple-700";
-  }
+  if (value === "present") return "bg-emerald-50 text-emerald-700";
+  if (value === "absent") return "bg-red-50 text-red-700";
+  if (value === "late") return "bg-amber-50 text-amber-700";
+  if (value === "half_day") return "bg-blue-50 text-blue-700";
+  if (value === "approved_leave") return "bg-purple-50 text-purple-700";
 
   return "bg-slate-100 text-slate-600";
 }
@@ -134,7 +121,6 @@ function calculateStats(records: AttendanceRecord[]): AttendanceStats {
     else if (status === "approved_leave") stats.leave++;
   });
 
-  // Approved leave is excluded from the attendance denominator.
   stats.total =
     stats.present + stats.absent + stats.late + stats.halfDay;
 
@@ -166,7 +152,6 @@ export default function StudentPortalPage() {
     setError("");
 
     try {
-      // Verify the authenticated session.
       const {
         data: { session },
         error: sessionError,
@@ -179,7 +164,6 @@ export default function StudentPortalPage() {
         return;
       }
 
-      // Identify the student through the secure account mapping.
       const { data: accountData, error: accountError } =
         await supabase
           .from("student_accounts")
@@ -194,7 +178,6 @@ export default function StudentPortalPage() {
         );
       }
 
-      // Load only this student's own profile.
       const { data: studentData, error: studentError } =
         await supabase
           .from("students")
@@ -206,7 +189,6 @@ export default function StudentPortalPage() {
 
       if (studentError) throw studentError;
 
-      // Load only this student's attendance records.
       const { data: attendanceData, error: attendanceError } =
         await supabase
           .from("attendance_records")
@@ -232,20 +214,20 @@ export default function StudentPortalPage() {
       setStudent(studentData as unknown as Student);
       setRecords(sortedRecords);
     } catch (err: unknown) {
-  console.error("Student dashboard loading error:", err);
+      console.error("Student dashboard loading error:", err);
 
-  let message = "Unable to load your student dashboard.";
+      let message = "Unable to load your student dashboard.";
 
-  if (
-    typeof err === "object" &&
-    err !== null &&
-    "message" in err
-  ) {
-    message = String(err.message);
-  }
+      if (
+        typeof err === "object" &&
+        err !== null &&
+        "message" in err
+      ) {
+        message = String(err.message);
+      }
 
-  setError(message);
-} finally {
+      setError(message);
+    } finally {
       setLoading(false);
       setRefreshing(false);
     }
@@ -357,7 +339,6 @@ export default function StudentPortalPage() {
 
   return (
     <main className="min-h-screen bg-[#f5f8f7] text-slate-900">
-      {/* Header */}
       <header className="sticky top-0 z-30 border-b border-slate-200/70 bg-white/90 backdrop-blur-xl">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-5 py-4 sm:px-8">
           <div className="flex items-center gap-3">
@@ -399,7 +380,6 @@ export default function StudentPortalPage() {
       </header>
 
       <div className="mx-auto max-w-7xl px-5 py-8 sm:px-8">
-        {/* Welcome section */}
         <section className="relative overflow-hidden rounded-[28px] bg-gradient-to-r from-emerald-700 via-emerald-600 to-teal-600 p-7 text-white shadow-xl shadow-emerald-900/10 sm:p-9">
           <div className="pointer-events-none absolute -right-12 -top-24 h-72 w-72 rounded-full border-[35px] border-white/10" />
           <div className="pointer-events-none absolute -bottom-28 right-48 h-64 w-64 rounded-full bg-white/5 blur-2xl" />
@@ -445,7 +425,6 @@ export default function StudentPortalPage() {
           </div>
         </section>
 
-        {/* Error banner */}
         {error && (
           <div className="mt-5 flex items-start gap-3 rounded-2xl border border-red-100 bg-red-50 p-4 text-sm text-red-700">
             <AlertCircle size={18} className="mt-0.5 shrink-0" />
@@ -501,6 +480,9 @@ export default function StudentPortalPage() {
             />
           </div>
         </section>
+
+        {/* My Fees and PayPal Payments */}
+        <StudentFees />
 
         {/* Progress and profile */}
         <section className="mt-6 grid gap-5 lg:grid-cols-3">
@@ -574,10 +556,7 @@ export default function StudentPortalPage() {
             </div>
 
             <div className="mt-6 space-y-4">
-              <ProfileRow
-                label="Full Name"
-                value={student?.full_name || "—"}
-              />
+              <ProfileRow label="Full Name" value={student?.full_name || "—"} />
               <ProfileRow
                 label="Admission Number"
                 value={student?.admission_number || "—"}
@@ -631,9 +610,7 @@ export default function StudentPortalPage() {
                   <div className="mt-5 h-2 overflow-hidden rounded-full bg-slate-100">
                     <div
                       className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-teal-500"
-                      style={{
-                        width: `${subject.percentage}%`,
-                      }}
+                      style={{ width: `${subject.percentage}%` }}
                     />
                   </div>
 
@@ -781,7 +758,7 @@ function StatCard({
   title: string;
   value: string | number;
   subtitle: string;
-  icon: React.ReactNode;
+  icon: ReactNode;
   color: "emerald" | "blue" | "red" | "amber";
 }) {
   const colors = {
