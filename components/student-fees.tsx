@@ -35,6 +35,7 @@ export default function StudentFees() {
   const [invoices, setInvoices] = useState<FeeInvoice[]>([]);
   const [loading, setLoading] = useState(true);
   const [payingId, setPayingId] = useState<string | null>(null);
+  const [paymentAmounts, setPaymentAmounts] = useState<Record<string, string>>({});
   const [message, setMessage] = useState("");
   const [messageType, setMessageType] = useState<"success" | "error" | "info">("info");
   const captureStarted = useRef(false);
@@ -49,7 +50,26 @@ export default function StudentFees() {
       .order("created_at", { ascending: false });
 
     if (error) throw error;
-    setInvoices((data ?? []) as FeeInvoice[]);
+
+    const rows = (data ?? []) as FeeInvoice[];
+    setInvoices(rows);
+
+    setPaymentAmounts((previous) => {
+      const next = { ...previous };
+
+      rows.forEach((invoice) => {
+        const outstanding = Math.max(
+          0,
+          Number(invoice.total_amount) - Number(invoice.paid_amount)
+        );
+
+        if (!(invoice.id in next)) {
+          next[invoice.id] = outstanding.toFixed(2);
+        }
+      });
+
+      return next;
+    });
   }, []);
 
   useEffect(() => {
@@ -70,6 +90,7 @@ export default function StudentFees() {
           .maybeSingle();
 
         if (accountError) throw accountError;
+
         if (!account?.student_id) {
           setMessage("Student account could not be found.");
           setMessageType("error");
@@ -118,7 +139,9 @@ export default function StudentFees() {
         }
       } catch (error) {
         setMessage(
-          error instanceof Error ? error.message : "Could not load fee information."
+          error instanceof Error
+            ? error.message
+            : "Could not load fee information."
         );
         setMessageType("error");
       } finally {
@@ -131,6 +154,21 @@ export default function StudentFees() {
 
   async function handlePay(invoice: FeeInvoice) {
     try {
+      const total = Number(invoice.total_amount);
+      const paid = Number(invoice.paid_amount);
+      const outstanding = Math.max(0, total - paid);
+      const paymentAmount = Number(paymentAmounts[invoice.id]);
+
+      if (
+        !Number.isFinite(paymentAmount) ||
+        paymentAmount <= 0 ||
+        paymentAmount > outstanding
+      ) {
+        throw new Error(
+          `Enter an amount greater than ₹0 and no more than ${money(outstanding)}.`
+        );
+      }
+
       setPayingId(invoice.id);
       setMessage("");
 
@@ -145,7 +183,10 @@ export default function StudentFees() {
           "Content-Type": "application/json",
           Authorization: `Bearer ${session.access_token}`,
         },
-        body: JSON.stringify({ invoiceId: invoice.id }),
+        body: JSON.stringify({
+          invoiceId: invoice.id,
+          paymentAmount,
+        }),
       });
 
       const result = await response.json();
@@ -212,7 +253,7 @@ export default function StudentFees() {
         <div>
           <h3 className="text-xl font-bold text-gray-900">Fee invoices</h3>
           <p className="mt-1 text-sm text-gray-500">
-            View your invoices and pay outstanding balances.
+            Pay the full balance or choose a partial payment.
           </p>
         </div>
         <button
@@ -268,10 +309,18 @@ export default function StudentFees() {
                         ? "bg-red-100 text-red-700"
                         : isPaid
                         ? "bg-emerald-100 text-emerald-700"
+                        : paid > 0
+                        ? "bg-blue-100 text-blue-700"
                         : "bg-amber-100 text-amber-700"
                     }`}
                   >
-                    {isCancelled ? "Cancelled" : isPaid ? "Paid" : invoice.status.replace("_", " ")}
+                    {isCancelled
+                      ? "Cancelled"
+                      : isPaid
+                      ? "Paid / Fee Cleared"
+                      : paid > 0
+                      ? "Partially Paid"
+                      : invoice.status.replace("_", " ")}
                   </span>
                 </div>
 
@@ -289,36 +338,63 @@ export default function StudentFees() {
                     </p>
                   </div>
                   <div>
-                    <p className="text-xs text-gray-500">Due</p>
+                    <p className="text-xs text-gray-500">Remaining</p>
                     <p className="mt-1 text-sm font-bold text-red-600">
                       {money(outstanding)}
                     </p>
                   </div>
                 </div>
 
-                <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-                  <p className="text-xs text-gray-500">
-                    Due date: {invoice.due_date || "Not specified"}
-                  </p>
+                <div className="mt-4 flex flex-wrap items-end justify-between gap-4">
+                  <div>
+                    <p className="text-xs text-gray-500">
+                      Due date: {invoice.due_date || "Not specified"}
+                    </p>
+                  </div>
 
                   {!isPaid && !isCancelled && (
-                    <button
-                      onClick={() => handlePay(invoice)}
-                      disabled={payingId !== null}
-                      className="flex items-center gap-2 rounded-xl bg-emerald-600 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {payingId === invoice.id ? (
-                        <Loader2 className="animate-spin" size={17} />
-                      ) : (
-                        <CreditCard size={17} />
-                      )}
-                      {payingId === invoice.id ? "Connecting..." : "Pay with PayPal"}
-                    </button>
+                    <div className="w-full space-y-3 sm:w-auto sm:min-w-72">
+                      <label className="block text-sm font-medium text-gray-700">
+                        Amount to pay (INR)
+                      </label>
+                      <input
+                        type="number"
+                        min="0.01"
+                        max={outstanding}
+                        step="0.01"
+                        value={paymentAmounts[invoice.id] ?? ""}
+                        onChange={(event) =>
+                          setPaymentAmounts((previous) => ({
+                            ...previous,
+                            [invoice.id]: event.target.value,
+                          }))
+                        }
+                        className="w-full rounded-xl border border-gray-300 px-4 py-3 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                        placeholder="Enter payment amount"
+                      />
+                      <p className="text-xs text-gray-500">
+                        Maximum payment: {money(outstanding)}
+                      </p>
+                      <button
+                        onClick={() => handlePay(invoice)}
+                        disabled={payingId !== null}
+                        className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {payingId === invoice.id ? (
+                          <Loader2 className="animate-spin" size={17} />
+                        ) : (
+                          <CreditCard size={17} />
+                        )}
+                        {payingId === invoice.id
+                          ? "Connecting..."
+                          : "Pay with PayPal"}
+                      </button>
+                    </div>
                   )}
 
                   {isPaid && (
                     <span className="flex items-center gap-2 text-sm font-semibold text-emerald-700">
-                      <CheckCircle2 size={17} /> Fully paid
+                      <CheckCircle2 size={17} /> Fee fully cleared
                     </span>
                   )}
                 </div>
@@ -329,9 +405,8 @@ export default function StudentFees() {
       )}
 
       <p className="text-xs leading-relaxed text-gray-400">
-        PayPal Sandbox is currently used for demo payments. The displayed invoice
-        amounts are in INR; the Sandbox checkout uses the configured USD demo
-        conversion rate.
+        PayPal Sandbox is currently used for demo payments. Invoice amounts are
+        displayed in INR; checkout uses the configured USD demo conversion rate.
       </p>
     </section>
   );
