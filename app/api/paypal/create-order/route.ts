@@ -164,8 +164,8 @@ export async function POST(request: NextRequest) {
       process.env.NEXT_PUBLIC_APP_URL ||
       "https://edutrack-ai-98ka.vercel.app";
 
-    const returnUrl = `${appUrl}/students-portal?paypal=success`;
-    const cancelUrl = `${appUrl}/students-portal?paypal=cancel`;
+    const returnUrl = `${appUrl}/student-portal?paypal=success`;
+    const cancelUrl = `${appUrl}/student-portal?paypal=cancel`;
 
     // 8. Create PayPal order.
     const orderResponse = await fetch(
