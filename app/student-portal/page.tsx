@@ -19,6 +19,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import StudentFees from "@/components/student-fees";
 
 type Student = {
   id: string;
