@@ -81,7 +81,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 4. Calculate the outstanding balance on the server.
+    // 4. Calculate outstanding balance on the server.
     const outstanding =
       Number(invoice.total_amount) - Number(invoice.paid_amount);
 
@@ -92,7 +92,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 5. Read the configured demo conversion rate.
+    // 5. Read demo conversion rate.
     const configuredRate = Number(
       process.env.PAYPAL_DEMO_INR_PER_USD
     );
@@ -114,11 +114,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 6. Connect to PayPal Sandbox.
+    // 6. Connect to PayPal.
     const clientId = process.env.PAYPAL_CLIENT_ID;
     const clientSecret = process.env.PAYPAL_CLIENT_SECRET;
 
-    const paypalBase = "https://api-m.sandbox.paypal.com";
+    const paypalBase =
+      process.env.PAYPAL_ENV === "production"
+        ? "https://api-m.paypal.com"
+        : "https://api-m.sandbox.paypal.com";
 
     if (!clientId || !clientSecret) {
       return NextResponse.json(
@@ -155,7 +158,16 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 7. Create the PayPal order.
+    // 7. Configure checkout return URLs.
+    // Use the deployed EduTrack AI domain, not an untrusted Host header.
+    const appUrl =
+      process.env.NEXT_PUBLIC_APP_URL ||
+      "https://edutrack-ai-98ka.vercel.app";
+
+    const returnUrl = `${appUrl}/students-portal?paypal=success`;
+    const cancelUrl = `${appUrl}/students-portal?paypal=cancel`;
+
+    // 8. Create PayPal order.
     const orderResponse = await fetch(
       `${paypalBase}/v2/checkout/orders`,
       {
@@ -179,6 +191,13 @@ export async function POST(request: NextRequest) {
               },
             },
           ],
+          application_context: {
+            brand_name: "EduTrack AI",
+            landing_page: "LOGIN",
+            user_action: "PAY_NOW",
+            return_url: returnUrl,
+            cancel_url: cancelUrl,
+          },
         }),
         cache: "no-store",
       }
@@ -195,7 +214,22 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 8. Save the PayPal order ownership and invoice details.
+    // 9. Find PayPal approval link.
+    const approvalUrl = orderData.links?.find(
+      (link: { rel: string; href: string }) =>
+        link.rel === "approve"
+    )?.href;
+
+    if (!approvalUrl) {
+      console.error("PayPal approval link missing:", orderData);
+
+      return NextResponse.json(
+        { error: "PayPal checkout link was not returned." },
+        { status: 502 }
+      );
+    }
+
+    // 10. Save secure order ownership.
     const { error: trackingError } = await supabaseAdmin
       .from("paypal_fee_orders")
       .insert({
@@ -220,6 +254,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       orderId: orderData.id,
+      approvalUrl,
       amountINR: outstanding.toFixed(2),
       amountUSD: usdAmount,
       exchangeRate,
