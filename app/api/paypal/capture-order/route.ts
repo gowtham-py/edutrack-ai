@@ -4,7 +4,11 @@ import { supabaseAdmin } from "@/lib/supabase-admin";
 
 export const runtime = "nodejs";
 
-const PAYPAL_BASE = "https://api-m.sandbox.paypal.com";
+function getPayPalBase() {
+  return process.env.PAYPAL_ENV?.trim().toLowerCase() === "production"
+    ? "https://api-m.paypal.com"
+    : "https://api-m.sandbox.paypal.com";
+}
 
 async function getPayPalToken() {
   const clientId = process.env.PAYPAL_CLIENT_ID;
@@ -19,7 +23,7 @@ async function getPayPalToken() {
   ).toString("base64");
 
   const response = await fetch(
-    `${PAYPAL_BASE}/v1/oauth2/token`,
+    `${getPayPalBase()}/v1/oauth2/token`,
     {
       method: "POST",
       headers: {
@@ -34,17 +38,40 @@ async function getPayPalToken() {
   const data = await response.json();
 
   if (!response.ok || !data.access_token) {
+    console.error("PayPal authentication error:", data);
     throw new Error("Unable to authenticate with PayPal.");
   }
 
   return data.access_token as string;
 }
 
+async function getPayPalOrder(orderId: string, token: string) {
+  const response = await fetch(
+    `${getPayPalBase()}/v2/checkout/orders/${encodeURIComponent(orderId)}`,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      cache: "no-store",
+    }
+  );
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    console.error("PayPal order lookup error:", data);
+    throw new Error("Unable to retrieve PayPal order.");
+  }
+
+  return data;
+}
+
 export async function POST(request: NextRequest) {
   try {
-    // 1. Verify the student's authenticated session.
+    // 1. Verify the authenticated student session.
     const authorization = request.headers.get("authorization");
-    const accessToken = authorization?.replace(/^Bearer\s+/i, "");
+    const accessToken = authorization?.replace(/^Bearer\s+/i, "").trim();
 
     if (!accessToken) {
       return NextResponse.json(
@@ -65,8 +92,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // 2. Validate the PayPal order ID.
     const body = await request.json();
-    const orderId = body.orderId;
+    const orderId = body?.orderId;
 
     if (
       typeof orderId !== "string" ||
@@ -78,7 +106,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 2. Resolve the authenticated student's account.
+    // 3. Find the authenticated student's account.
     const { data: account, error: accountError } =
       await supabaseAdmin
         .from("student_accounts")
@@ -87,13 +115,15 @@ export async function POST(request: NextRequest) {
         .maybeSingle();
 
     if (accountError || !account) {
+      console.error("Student account lookup error:", accountError);
+
       return NextResponse.json(
         { error: "Student account not found." },
         { status: 403 }
       );
     }
 
-    // 3. Confirm that this order belongs to this student.
+    // 4. Confirm that this order belongs to this student.
     const { data: trackedOrder, error: trackingError } =
       await supabaseAdmin
         .from("paypal_fee_orders")
@@ -106,42 +136,107 @@ export async function POST(request: NextRequest) {
         .maybeSingle();
 
     if (trackingError || !trackedOrder) {
+      console.error("Tracked order lookup error:", trackingError);
+
       return NextResponse.json(
         { error: "Payment order not found or access denied." },
         { status: 404 }
       );
     }
 
-    // 4. Authenticate with PayPal.
-    const paypalToken = await getPayPalToken();
+    // 5. Retrieve the original invoice.
+    const { data: invoice, error: invoiceError } =
+      await supabaseAdmin
+        .from("fee_invoices")
+        .select("id, invoice_number, student_id, school_id")
+        .eq("id", trackedOrder.invoice_id)
+        .eq("student_id", account.student_id)
+        .eq("school_id", account.school_id)
+        .maybeSingle();
 
-    // 5. Retrieve the actual PayPal order.
-    const orderResponse = await fetch(
-      `${PAYPAL_BASE}/v2/checkout/orders/${encodeURIComponent(orderId)}`,
-      {
-        headers: {
-          Authorization: `Bearer ${paypalToken}`,
-          "Content-Type": "application/json",
-        },
-        cache: "no-store",
-      }
-    );
-
-    let paypalOrder = await orderResponse.json();
-
-    if (!orderResponse.ok) {
-      console.error("PayPal order lookup error:", paypalOrder);
+    if (invoiceError || !invoice) {
+      console.error("Invoice verification error:", invoiceError);
 
       return NextResponse.json(
-        { error: "Unable to verify PayPal order." },
-        { status: 502 }
+        { error: "Invoice not found or access denied." },
+        { status: 404 }
       );
     }
 
-    // 6. Capture only an approved order.
-    if (paypalOrder.status === "APPROVED") {
+    // 6. Authenticate with PayPal.
+    const paypalToken = await getPayPalToken();
+
+    // 7. Retrieve the original PayPal order BEFORE capture.
+    const originalOrder = await getPayPalOrder(
+      orderId,
+      paypalToken
+    );
+
+    // 8. Verify the original invoice reference.
+    // PayPal may omit some original reference fields from
+    // its capture response, so validate them on the original order.
+    const originalPurchaseUnits =
+      originalOrder.purchase_units || [];
+
+    const purchaseUnit = originalPurchaseUnits.find(
+      (unit: {
+        custom_id?: string;
+        reference_id?: string;
+        invoice_id?: string;
+      }) => {
+        const customIdMatches =
+          unit.custom_id === trackedOrder.invoice_id;
+
+        const referenceIdMatches =
+          !unit.reference_id ||
+          unit.reference_id === trackedOrder.invoice_id;
+
+        const invoiceNumberMatches =
+          !unit.invoice_id ||
+          unit.invoice_id === invoice.invoice_number;
+
+        return (
+          customIdMatches &&
+          referenceIdMatches &&
+          invoiceNumberMatches
+        );
+      }
+    );
+
+    if (!purchaseUnit) {
+      console.error("PayPal invoice reference mismatch:", {
+        orderId,
+        expectedInvoiceId: trackedOrder.invoice_id,
+        expectedInvoiceNumber: invoice.invoice_number,
+        receivedPurchaseUnits: originalPurchaseUnits,
+      });
+
+      return NextResponse.json(
+        { error: "PayPal invoice reference does not match." },
+        { status: 400 }
+      );
+    }
+
+    // 9. Verify the original order amount.
+    const orderAmount = Number(purchaseUnit.amount?.value);
+    const expectedAmount = Number(trackedOrder.amount_usd);
+
+    if (
+      purchaseUnit.amount?.currency_code !== "USD" ||
+      !Number.isFinite(orderAmount) ||
+      !Number.isFinite(expectedAmount) ||
+      orderAmount.toFixed(2) !== expectedAmount.toFixed(2)
+    ) {
+      return NextResponse.json(
+        { error: "PayPal order amount does not match the invoice." },
+        { status: 400 }
+      );
+    }
+
+    // 10. Capture only an approved order.
+    if (originalOrder.status === "APPROVED") {
       const captureResponse = await fetch(
-        `${PAYPAL_BASE}/v2/checkout/orders/${encodeURIComponent(orderId)}/capture`,
+        `${getPayPalBase()}/v2/checkout/orders/${encodeURIComponent(orderId)}/capture`,
         {
           method: "POST",
           headers: {
@@ -159,61 +254,61 @@ export async function POST(request: NextRequest) {
       if (!captureResponse.ok) {
         console.error("PayPal capture response:", captureData);
 
-        // Re-fetch in case PayPal completed the capture
-        // but the original response was interrupted.
-        const retryResponse = await fetch(
-          `${PAYPAL_BASE}/v2/checkout/orders/${encodeURIComponent(orderId)}`,
-          {
-            headers: {
-              Authorization: `Bearer ${paypalToken}`,
-            },
-            cache: "no-store",
-          }
-        );
-
-        if (!retryResponse.ok) {
-          return NextResponse.json(
-            { error: "Payment capture could not be verified." },
-            { status: 502 }
-          );
-        }
-
-        paypalOrder = await retryResponse.json();
-      } else {
-        paypalOrder = captureData;
+        // The capture may have completed even if the
+        // original response was interrupted. Verify below.
       }
-    }
-
-    // 7. Only accept a completed PayPal order.
-    if (paypalOrder.status !== "COMPLETED") {
+    } else if (originalOrder.status !== "COMPLETED") {
       return NextResponse.json(
         {
-          error:
-            "PayPal has not confirmed a completed payment.",
-          paypalStatus: paypalOrder.status,
+          error: "PayPal has not approved this payment.",
+          paypalStatus: originalOrder.status,
         },
         { status: 400 }
       );
     }
 
-    // 8. Verify the invoice reference and captured amount.
-    const purchaseUnit = paypalOrder.purchase_units?.find(
-      (unit: {
-        reference_id?: string;
-        custom_id?: string;
-      }) =>
-        unit.reference_id === trackedOrder.invoice_id &&
-        unit.custom_id === trackedOrder.invoice_id
+    // 11. Re-fetch the order to verify its final status.
+    const completedOrder = await getPayPalOrder(
+      orderId,
+      paypalToken
     );
 
-    if (!purchaseUnit) {
+    if (completedOrder.status !== "COMPLETED") {
       return NextResponse.json(
-        { error: "PayPal invoice reference does not match." },
+        {
+          error: "PayPal has not confirmed a completed payment.",
+          paypalStatus: completedOrder.status,
+        },
         { status: 400 }
       );
     }
 
-    const capture = purchaseUnit.payments?.captures?.find(
+    // 12. Get the completed capture.
+    // Use the verified original purchase unit for invoice matching.
+    const completedPurchaseUnit =
+      completedOrder.purchase_units?.find(
+        (unit: {
+          custom_id?: string;
+          reference_id?: string;
+        }) =>
+          unit.custom_id === trackedOrder.invoice_id ||
+          (
+            !unit.custom_id &&
+            unit.reference_id === trackedOrder.invoice_id
+          )
+      );
+
+    if (!completedPurchaseUnit) {
+      return NextResponse.json(
+        { error: "Completed PayPal invoice reference could not be verified." },
+        { status: 400 }
+      );
+    }
+
+    const captures =
+      completedPurchaseUnit.payments?.captures || [];
+
+    const capture = captures.find(
       (item: {
         status?: string;
         id?: string;
@@ -231,22 +326,28 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // 13. Verify the actual captured amount.
     const capturedAmount = Number(capture.amount.value);
-    const expectedAmount = Number(trackedOrder.amount_usd);
 
     if (
       capture.amount.currency_code !== "USD" ||
       !Number.isFinite(capturedAmount) ||
       capturedAmount.toFixed(2) !== expectedAmount.toFixed(2)
     ) {
+      console.error("PayPal captured amount mismatch:", {
+        capturedAmount,
+        expectedAmount,
+        currency: capture.amount.currency_code,
+      });
+
       return NextResponse.json(
         { error: "PayPal captured amount does not match the order." },
         { status: 400 }
       );
     }
 
-    // 9. Record the verified payment and update the invoice
-    // through the protected database transaction.
+    // 14. Record payment using the existing protected,
+    // idempotent database transaction.
     const { data: result, error: paymentError } =
       await supabaseAdmin.rpc(
         "capture_paypal_fee_payment",
@@ -272,9 +373,12 @@ export async function POST(request: NextRequest) {
       success: true,
       message: "PayPal payment verified successfully.",
       receipt: result,
+      orderId,
+      captureId: capture.id,
       amountUSD: capturedAmount.toFixed(2),
       currency: "USD",
     });
+
   } catch (error) {
     console.error("PayPal capture API error:", error);
 
