@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import StudentFees from "@/components/student-fees";
+import FeeAssistant from "@/components/fee-assistant";
 
 type Student = {
   id: string;
@@ -483,6 +484,10 @@ export default function StudentPortalPage() {
 
         {/* My Fees and PayPal Payments */}
         <StudentFees />
+        {/* AI Fee Assistant */}
+        <section className="mt-8">
+          <FeeAssistant />
+        </section>
 
         {/* Progress and profile */}
         <section className="mt-6 grid gap-5 lg:grid-cols-3">
