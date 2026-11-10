@@ -30,9 +30,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 2. Validate the invoice ID.
+    // 2. Validate the requested invoice and payment amount.
     const body = await request.json();
     const invoiceId = body?.invoiceId;
+    const requestedAmount = Number(body?.paymentAmount);
 
     if (typeof invoiceId !== "string" || !invoiceId.trim()) {
       return NextResponse.json(
@@ -40,6 +41,19 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
+
+    if (
+      !Number.isFinite(requestedAmount) ||
+      requestedAmount <= 0 ||
+      Math.round(requestedAmount * 100) !== requestedAmount * 100
+    ) {
+      return NextResponse.json(
+        { error: "Enter a valid payment amount with up to two decimal places." },
+        { status: 400 }
+      );
+    }
+
+    const paymentAmountINR = Number(requestedAmount.toFixed(2));
 
     // 3. Find the authenticated student's account.
     const { data: account, error: accountError } =
@@ -86,7 +100,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 5. Calculate the outstanding amount securely.
+    // 5. Calculate the outstanding balance on the server.
     const totalAmount = Number(invoice.total_amount);
     const paidAmount = Number(invoice.paid_amount);
 
@@ -113,7 +127,16 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 6. Read the demo INR-to-USD exchange rate.
+    if (paymentAmountINR > outstanding) {
+      return NextResponse.json(
+        {
+          error: `Payment cannot exceed the remaining balance of ₹${outstanding.toFixed(2)}.`,
+        },
+        { status: 400 }
+      );
+    }
+
+    // 6. Read the INR-to-USD exchange rate.
     const configuredRate = Number(
       process.env.PAYPAL_DEMO_INR_PER_USD
     );
@@ -126,7 +149,7 @@ export async function POST(request: NextRequest) {
     }
 
     const exchangeRate = Number(configuredRate.toFixed(4));
-    const usdAmount = (outstanding / exchangeRate).toFixed(2);
+    const usdAmount = (paymentAmountINR / exchangeRate).toFixed(2);
 
     if (Number(usdAmount) < 0.01) {
       return NextResponse.json(
@@ -184,7 +207,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 9. Configure the correct deployed return URLs.
+    // 9. Configure return URLs.
     const appUrl = (
       process.env.NEXT_PUBLIC_APP_URL ||
       "https://edutrack-ai-98ka.vercel.app"
@@ -193,7 +216,7 @@ export async function POST(request: NextRequest) {
     const returnUrl = `${appUrl}/student-portal?paypal=success`;
     const cancelUrl = `${appUrl}/student-portal?paypal=cancel`;
 
-    // 10. Create the PayPal order in USD.
+    // 10. Create a PayPal order for the selected amount.
     const orderResponse = await fetch(
       `${paypalBase}/v2/checkout/orders`,
       {
@@ -205,21 +228,18 @@ export async function POST(request: NextRequest) {
         },
         body: JSON.stringify({
           intent: "CAPTURE",
-
           purchase_units: [
             {
               reference_id: invoice.id,
               custom_id: invoice.id,
               invoice_id: invoice.invoice_number,
-              description: `EduTrack AI fee invoice ${invoice.invoice_number}`,
-
+              description: `EduTrack AI fee payment for ${invoice.invoice_number}`,
               amount: {
                 currency_code: "USD",
                 value: usdAmount,
               },
             },
           ],
-
           application_context: {
             brand_name: "EduTrack AI",
             landing_page: "LOGIN",
@@ -247,7 +267,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 11. Get the PayPal approval URL.
+    // 11. Find the PayPal approval URL.
     const approvalUrl = orderData.links?.find(
       (link: { rel: string; href: string }) =>
         link.rel === "approve"
@@ -262,7 +282,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 12. Save order ownership securely in Supabase.
+    // 12. Save the exact selected INR amount for verified capture.
     const { error: trackingError } = await supabaseAdmin
       .from("paypal_fee_orders")
       .insert({
@@ -270,7 +290,7 @@ export async function POST(request: NextRequest) {
         school_id: invoice.school_id,
         invoice_id: invoice.id,
         student_id: account.student_id,
-        amount_inr: outstanding,
+        amount_inr: paymentAmountINR,
         amount_usd: Number(usdAmount),
         exchange_rate: exchangeRate,
         status: "created",
@@ -285,16 +305,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 13. Return checkout details to the frontend.
+    // 13. Return checkout details.
     return NextResponse.json({
       orderId: orderData.id,
       approvalUrl,
-      amountINR: outstanding.toFixed(2),
+      amountINR: paymentAmountINR.toFixed(2),
       amountUSD: usdAmount,
       exchangeRate,
       currency: "USD",
     });
-
   } catch (error) {
     console.error("PayPal create order error:", error);
 
