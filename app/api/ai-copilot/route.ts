@@ -114,6 +114,22 @@ async function getUserContext(userId: string): Promise<UserContext | null> {
       (sum, item) => sum + Number(item.paid_amount || 0),
       0
     );
+    const completedPayments = paymentsResult.data || [];
+
+const totalCollected = completedPayments.reduce(
+  (sum, payment) => sum + Number(payment.amount || 0),
+  0
+);
+
+const paypalCollected = completedPayments
+  .filter(
+    (payment) =>
+      payment.payment_method?.toLowerCase() === "paypal"
+  )
+  .reduce(
+    (sum, payment) => sum + Number(payment.amount || 0),
+    0
+  );
 
     return {
       role: profile.role,
