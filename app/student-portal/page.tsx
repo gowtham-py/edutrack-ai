@@ -22,6 +22,7 @@ import {
 import { supabase } from "@/lib/supabase";
 import StudentFees from "@/components/student-fees";
 import FeeAssistant from "@/components/fee-assistant";
+import AICopilot from "@/components/ai-copilot";
 
 type Student = {
   id: string;
@@ -748,6 +749,10 @@ export default function StudentPortalPage() {
         <footer className="py-9 text-center text-xs text-slate-400">
           EduTrack AI · Secure Student Portal
         </footer>
+        <AICopilot
+  fullName={student?.full_name || "Student"}
+  userRole="student"
+/>
       </div>
     </main>
   );
