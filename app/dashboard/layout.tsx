@@ -1,6 +1,6 @@
 
 "use client";
-
+import AICopilot from "@/components/ai-copilot";
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import Link from "next/link";
@@ -299,6 +299,12 @@ export default function DashboardLayout({
             children
           )}
         </main>
+        {!loading && (
+  <AICopilot
+    fullName={fullName}
+    userRole={userRole}
+  />
+)}
       </div>
     </div>
   );
