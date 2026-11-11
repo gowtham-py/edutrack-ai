@@ -6,6 +6,12 @@ EduTrack AI is an AI-powered education management platform designed to simplify 
 
 **Live Demo:** https://edutrack-ai-98ka.vercel.app
 
+## Project Demo Video
+
+Watch the EduTrack AI demonstration:
+
+https://youtu.be/W4HjNQxTKwc
+
 **GitHub Repository:** https://github.com/gowtham-py/edutrack-ai
 
 ## Features
