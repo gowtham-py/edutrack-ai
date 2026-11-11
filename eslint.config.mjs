@@ -1,11 +1,8 @@
 
 import { defineConfig, globalIgnores } from "eslint/config";
-import { createRequire } from "node:module";
-import path from "node:path";
 import { fileURLToPath } from "node:url";
+import path from "node:path";
 import { FlatCompat } from "@eslint/eslintrc";
-
-const require = createRequire(import.meta.url);
 
 const compat = new FlatCompat({
   baseDirectory: path.dirname(fileURLToPath(import.meta.url)),
@@ -13,6 +10,14 @@ const compat = new FlatCompat({
 
 const eslintConfig = defineConfig([
   ...compat.extends("next/core-web-vitals", "next/typescript"),
+
+  {
+    rules: {
+      "@typescript-eslint/no-explicit-any": "warn",
+      "react/no-unescaped-entities": "warn",
+    },
+  },
+
   globalIgnores([
     ".next/**",
     "out/**",
