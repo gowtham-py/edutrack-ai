@@ -4,6 +4,8 @@ import { supabaseAdmin } from "@/lib/supabase-admin";
 
 export const runtime = "nodejs";
 
+const GEMINI_MODEL = "gemini-3.8-flash";
+
 function money(value: number) {
   return new Intl.NumberFormat("en-IN", {
     style: "currency",
@@ -39,7 +41,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Validate the question.
+    // Validate the student's question.
     const body = await request.json();
     const message =
       typeof body.message === "string"
@@ -53,7 +55,19 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Find this student's account only.
+    // Check Gemini configuration.
+    const apiKey = process.env.GEMINI_API_KEY;
+
+    if (!apiKey) {
+      console.error("GEMINI_API_KEY is missing.");
+
+      return NextResponse.json(
+        { error: "AI assistant is not configured yet." },
+        { status: 503 }
+      );
+    }
+
+    // Find only this logged-in student's account.
     const { data: account, error: accountError } =
       await supabaseAdmin
         .from("student_accounts")
@@ -93,102 +107,150 @@ export async function POST(request: NextRequest) {
 
     const records = invoices ?? [];
 
-    const outstanding = records.reduce((sum, invoice) => {
-      if (invoice.status === "cancelled") return sum;
+    const invoiceSummary = records.map((invoice) => {
+      const total = Number(invoice.total_amount || 0);
+      const paid = Number(invoice.paid_amount || 0);
+      const balance =
+        invoice.status === "cancelled"
+          ? 0
+          : Math.max(0, total - paid);
 
-      return sum + Math.max(
-        0,
-        Number(invoice.total_amount) - Number(invoice.paid_amount)
-      );
-    }, 0);
+      return {
+        invoiceNumber: invoice.invoice_number,
+        academicYear: invoice.academic_year,
+        billingPeriod: invoice.billing_period,
+        totalAmount: total,
+        paidAmount: paid,
+        remainingBalance: balance,
+        dueDate: invoice.due_date,
+        status: invoice.status,
+      };
+    });
 
-    const paidTotal = records.reduce(
-      (sum, invoice) => sum + Number(invoice.paid_amount || 0),
+    const outstanding = invoiceSummary.reduce(
+      (sum, invoice) => sum + invoice.remainingBalance,
       0
     );
 
-    const pendingInvoices = records.filter(
-      (invoice) =>
-        invoice.status !== "cancelled" &&
-        Number(invoice.total_amount) > Number(invoice.paid_amount)
+    const paidTotal = invoiceSummary.reduce(
+      (sum, invoice) => sum + invoice.paidAmount,
+      0
     );
 
-    const question = message.toLowerCase();
-    let reply = "";
+    // Give Gemini verified database information.
+    const studentFeeContext = {
+      currency: "INR",
+      totalRecordedPayments: money(paidTotal),
+      totalOutstandingBalance: money(outstanding),
+      invoiceCount: invoiceSummary.length,
+      invoices: invoiceSummary,
+    };
 
-    if (
-      question.includes("pending") ||
-      question.includes("due") ||
-      question.includes("outstanding")
-    ) {
-      if (pendingInvoices.length === 0) {
-        reply = "Great news! You have no outstanding fee invoices.";
-      } else {
-        reply =
-          `Your total outstanding balance is ${money(outstanding)}.\n\n` +
-          pendingInvoices
-            .map((invoice) => {
-              const due =
-                Number(invoice.total_amount) -
-                Number(invoice.paid_amount);
+    const systemInstruction = `
+You are EduTrack AI's intelligent Student Fee Assistant.
 
-              return (
-                `Invoice: ${invoice.invoice_number}\n` +
-                `Period: ${invoice.billing_period} (${invoice.academic_year})\n` +
-                `Outstanding: ${money(due)}\n` +
-                `Status: ${invoice.status}`
-              );
-            })
-            .join("\n\n");
+Your job is to help students understand their school or college fee information.
+
+Use ONLY the verified invoice information supplied in the conversation.
+
+Rules:
+1. Answer naturally, politely and clearly.
+2. Explain full payments, partial payments and remaining balances.
+3. Use Indian Rupees (₹) for all monetary amounts.
+4. When explaining a balance, use the supplied remainingBalance.
+5. Never invent invoices, payments, receipts, dates or payment confirmations.
+6. Never claim that a payment succeeded unless the supplied database information confirms it.
+7. You cannot process payments or issue official receipts.
+8. For payment instructions, direct students to the My Fees section of their Student Portal.
+9. For official receipts or invoice corrections, direct students to their school administration.
+10. If information is missing, clearly say that you cannot verify it.
+11. Do not reveal information about other students.
+12. Keep answers friendly, helpful and reasonably concise.
+
+You are an assistant, not the payment authority.
+The database and PayPal verification are the sources of truth.
+`;
+
+    const geminiResponse = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          systemInstruction: {
+            parts: [{ text: systemInstruction }],
+          },
+          contents: [
+            {
+              role: "user",
+              parts: [
+                {
+                  text:
+                    "Verified student fee information:\n" +
+                    JSON.stringify(studentFeeContext, null, 2) +
+                    "\n\nStudent question:\n" +
+                    message,
+                },
+              ],
+            },
+          ],
+          generationConfig: {
+            temperature: 0.3,
+            maxOutputTokens: 700,
+          },
+        }),
+        signal: AbortSignal.timeout(30000),
       }
-    } else if (
-      question.includes("history") ||
-      question.includes("paid") ||
-      question.includes("payment")
-    ) {
-      reply =
-        `Your recorded payments total ${money(paidTotal)}.\n` +
-        `Your current outstanding balance is ${money(outstanding)}.\n\n` +
-        "Here is your recent invoice summary:\n\n" +
-        (records.length
-          ? records
-              .slice(0, 10)
-              .map(
-                (invoice) =>
-                  `${invoice.invoice_number}: Paid ${money(
-                    Number(invoice.paid_amount)
-                  )} of ${money(Number(invoice.total_amount))} (${invoice.status})`
-              )
-              .join("\n")
-          : "No invoices were found.");
-    } else if (
-      question.includes("receipt") ||
-      question.includes("invoice")
-    ) {
-      reply =
-        "You can view your invoices in the My Fees section of your Student Portal.\n\n" +
-        (records.length
-          ? records
-              .slice(0, 10)
-              .map(
-                (invoice) =>
-                  `${invoice.invoice_number} — ${invoice.status}, total ${money(
-                    Number(invoice.total_amount)
-                  )}, paid ${money(Number(invoice.paid_amount))}`
-              )
-              .join("\n")
-          : "There are no invoices on your account yet.") +
-        "\n\nFor an official receipt, please use the receipt option provided by your school.";
-    } else {
-      reply =
-        `I can help with your fee information.\n\n` +
-        `Total recorded payments: ${money(paidTotal)}\n` +
-        `Outstanding balance: ${money(outstanding)}\n` +
-        `Invoices found: ${records.length}\n\n` +
-        "Try asking me about your pending fees, payment history, invoices, or receipts.";
+    );
+
+    const result = (await geminiResponse.json()) as {
+      candidates?: Array<{
+        content?: {
+          parts?: Array<{ text?: string }>;
+        };
+      }>;
+      error?: {
+        message?: string;
+      };
+    };
+
+    if (!geminiResponse.ok) {
+      console.error(
+        "Gemini API error:",
+        geminiResponse.status,
+        result.error?.message
+      );
+
+      return NextResponse.json(
+        {
+          error:
+            "The AI assistant could not respond right now. Please try again.",
+        },
+        { status: 502 }
+      );
     }
 
-    return NextResponse.json({ success: true, reply });
+    const reply =
+      result.candidates?.[0]?.content?.parts
+        ?.map((part) => part.text || "")
+        .join("")
+        .trim() || "";
+
+    if (!reply) {
+      return NextResponse.json(
+        { error: "The AI assistant returned an empty response. Please try again." },
+        { status: 502 }
+      );
+    }
+
+    return NextResponse.json({
+      success: true,
+      reply,
+      aiPowered: true,
+      model: GEMINI_MODEL,
+    });
   } catch (error) {
     console.error("Fee assistant API error:", error);
 
