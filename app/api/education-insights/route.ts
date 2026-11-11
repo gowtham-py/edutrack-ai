@@ -386,23 +386,26 @@ export async function POST(request: NextRequest) {
       (classes || []).map((item) => [item.id, item.name])
     );
 
-    const classGroups = new Map<
-      string,
-      { records: AttendanceRecord[]; name: string }
-    >();
+const classGroups = new Map<
+  string,
+  { records: AttendanceRecord[]; name: string }
+>();
 
-    for (const session of sessionRows) {
-      const group = classGroups.get(session.class_id) || {
-        records: [],
-        name: classNames.get(session.class_id) || "Class",
-      };
+for (const session of sessionRows) {
+  const group: { records: AttendanceRecord[]; name: string } =
+    classGroups.get(session.class_id) ?? {
+      records: [],
+      name: classNames.get(session.class_id) || "Class",
+    };
 
-      group.records.push(
-        ...attendanceRecords.filter((record) => record.session_id === session.id)
-      );
+  const sessionRecords: AttendanceRecord[] = attendanceRecords.filter(
+    (record) => record.session_id === session.id
+  );
 
-      classGroups.set(session.class_id, group);
-    }
+  group.records.push(...sessionRecords);
+
+  classGroups.set(session.class_id, group);
+}
 
     const classInsights = Array.from(classGroups.values())
       .map((group) => ({
