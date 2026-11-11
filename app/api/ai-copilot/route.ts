@@ -35,12 +35,13 @@ async function getUserContext(userId: string): Promise<UserContext | null> {
     const schoolId = profile.school_id;
 
     const [
-      studentsResult,
-      teachersResult,
-      classesResult,
-      invoicesResult,
-      sessionsResult,
-    ] = await Promise.all([
+  studentsResult,
+  teachersResult,
+  classesResult,
+  invoicesResult,
+  paymentsResult,
+  sessionsResult,
+] = await Promise.all([
       supabaseAdmin
         .from("students")
         .select("id", { count: "exact", head: true })
@@ -62,6 +63,15 @@ async function getUserContext(userId: string): Promise<UserContext | null> {
         .select("total_amount, paid_amount, status, due_date")
         .eq("school_id", schoolId)
         .limit(500),
+      supabaseAdmin
+  .from("fee_payments")
+  .select(
+    "id, invoice_id, student_id, amount, payment_method, transaction_reference, status, paid_at, receipt_number"
+  )
+  .eq("school_id", schoolId)
+  .eq("status", "completed")
+  .order("paid_at", { ascending: false })
+  .limit(500),
 
       supabaseAdmin
         .from("attendance_sessions")
@@ -76,6 +86,7 @@ async function getUserContext(userId: string): Promise<UserContext | null> {
       teachersResult.error ||
       classesResult.error ||
       invoicesResult.error ||
+      paymentsResult.error ||
       sessionsResult.error
     ) {
       throw new Error("Unable to retrieve school information.");
