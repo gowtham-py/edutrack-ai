@@ -181,7 +181,10 @@ export default function AICopilot({ fullName, userRole }: Props) {
           "Content-Type": "application/json",
           Authorization: `Bearer ${sessionData.session.access_token}`,
         },
-        body: JSON.stringify({ message: text }),
+        body: JSON.stringify({
+  message: text,
+  history: messages.slice(-10),
+}),
         cache: "no-store",
       });
 
