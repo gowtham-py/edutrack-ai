@@ -143,10 +143,15 @@ const paypalCollected = completedPayments
         totalFees,
         paidFees,
         outstandingFees: Math.max(0, totalFees - paidFees),
+        completedPayments,
+totalCollected,
+paypalCollected,
+successfulPaymentCount: completedPayments.length,
         recentInvoices: invoices.slice(0, 100),
         attendanceSessions: sessionsResult.data || [],
         attendanceRecords: attendanceRecords || [],
         attendanceRecordsRetrieved: (attendanceRecords || []).length,
+        
       },
     };
   }
