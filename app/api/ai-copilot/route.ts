@@ -322,6 +322,20 @@ export async function POST(request: NextRequest) {
     if (!message || message.length > 1000) {
       return errorResponse("Please enter a message (maximum 1000 characters).");
     }
+    const history = Array.isArray(body.history)
+  ? body.history
+      .slice(-10)
+      .filter(
+        (item: { role?: string; content?: string }) =>
+          ["user", "assistant"].includes(item.role || "") &&
+          typeof item.content === "string" &&
+          item.content.trim().length > 0
+      )
+      .map((item: { role: string; content: string }) => ({
+        role: item.role === "assistant" ? "model" : "user",
+        parts: [{ text: item.content.trim().slice(0, 1000) }],
+      }))
+  : [];
 
     const context = await getUserContext(authData.user.id);
 
@@ -368,11 +382,12 @@ ${JSON.stringify(context.data)}
             parts: [{ text: systemInstruction }],
           },
           contents: [
-            {
-              role: "user",
-              parts: [{ text: message }],
-            },
-          ],
+  ...history,
+  {
+    role: "user",
+    parts: [{ text: message }],
+  },
+],
           generationConfig: {
             temperature: 0.3,
             maxOutputTokens: 1200,
