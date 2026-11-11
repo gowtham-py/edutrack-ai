@@ -229,11 +229,10 @@ export async function POST(request: NextRequest) {
         body: JSON.stringify({
           intent: "CAPTURE",
           purchase_units: [
-            {
-              reference_id: invoice.id,
-              custom_id: invoice.id,
-              invoice_id: invoice.invoice_number,
-              description: `EduTrack AI fee payment for ${invoice.invoice_number}`,
+  {
+    reference_id: invoice.id,
+    custom_id: invoice.id,
+    description: `EduTrack AI fee payment for ${invoice.invoice_number}`,
               amount: {
                 currency_code: "USD",
                 value: usdAmount,
